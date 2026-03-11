@@ -1,0 +1,9 @@
+-keep class com.example.codedroid.** { *; }
+-keep class org.apache.commons.net.** { *; }
+-keep class com.google.gson.** { *; }
+-keepattributes Signature
+-keepattributes *Annotation*
+-dontwarn org.apache.commons.net.**
+-dontwarn javax.mail.**
+-dontwarn org.ietf.jgss.**
+-dontwarn org.slf4j.**

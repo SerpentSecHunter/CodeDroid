@@ -1,0 +1,16 @@
+{
+  "id": "com.codedroid.formatter",
+  "name": "Code Formatter",
+  "version": "1.0.0",
+  "author": "CodeDroid Team",
+  "description": "Format kode otomatis — indentasi, spasi, dan struktur kode",
+  "icon": "🎯",
+  "category": "editor",
+  "builtin": true,
+  "enabled": true,
+  "actions": [
+    { "id": "format_code",     "label": "Format Kode",        "shortcut": "Ctrl+Shift+F" },
+    { "id": "indent_fix",      "label": "Perbaiki Indentasi", "shortcut": "" },
+    { "id": "trim_whitespace", "label": "Hapus Spasi Ekstra", "shortcut": "" }
+  ]
+}

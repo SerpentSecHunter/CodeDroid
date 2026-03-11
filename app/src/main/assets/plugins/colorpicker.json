@@ -1,0 +1,15 @@
+{
+  "id": "com.codedroid.colorpicker",
+  "name": "Color Picker",
+  "version": "1.0.0",
+  "author": "CodeDroid Team",
+  "description": "Pilih warna dan sisipkan kode warna HEX/RGB/HSL ke editor",
+  "icon": "🎨",
+  "category": "editor",
+  "builtin": true,
+  "enabled": false,
+  "actions": [
+    { "id": "open_colorpicker", "label": "Buka Color Picker", "shortcut": "" },
+    { "id": "hex_to_rgb",       "label": "HEX ke RGB",        "shortcut": "" }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "com.codedroid.base64",
+  "name": "Base64 Encoder/Decoder",
+  "version": "1.0.0",
+  "author": "CodeDroid Team",
+  "description": "Encode dan decode teks Base64 langsung di editor",
+  "icon": "🔐",
+  "category": "utility",
+  "builtin": true,
+  "enabled": true,
+  "actions": [
+    { "id": "encode_base64", "label": "Encode Base64", "shortcut": "" },
+    { "id": "decode_base64", "label": "Decode Base64", "shortcut": "" }
+  ]
+}
