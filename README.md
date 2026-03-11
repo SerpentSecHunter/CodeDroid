@@ -97,18 +97,7 @@ Navigation bar bawah yang animatif dengan:
 
 ---
 
-## 📸 Screenshot
-
-> *Segera tersedia*
-
----
-
 ## 🚀 Instalasi
-
-### Download APK
-1. Buka halaman [Releases](../../releases)
-2. Download file `CodeDroid-v2.1.0-debug.apk`
-3. Install di perangkat Android (aktifkan "Install dari sumber tidak dikenal")
 
 ### Build dari Source
 ```bash
