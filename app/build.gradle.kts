@@ -12,8 +12,8 @@ android {
         applicationId             = "com.example.codedroid"
         minSdk                    = 26
         targetSdk                 = 35
-        versionCode               = 2
-        versionName               = "2.0.0"
+        versionCode               = 4
+        versionName               = "2.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -73,6 +73,12 @@ dependencies {
 
     // WebView
     implementation(libs.webkit)
+
+    // New dependencies for v2.2
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("com.airbnb.android:lottie-compose:6.4.0")
+    implementation("androidx.compose.material3:material3:1.3.1")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
