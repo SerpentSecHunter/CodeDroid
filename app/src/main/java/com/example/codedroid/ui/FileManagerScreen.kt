@@ -90,7 +90,7 @@ fun FileManagerScreen(
     }
 
     LaunchedEffect(currentPath) { loadFiles() }
-    LaunchedEffect(searchQuery) { loadFiles() }
+    LaunchedEffect(searchQuery) { if (searchQuery.isNotBlank()) loadFiles() }
 
     Column(Modifier.fillMaxSize()) {
         // ── Top bar ──────────────────────────────────────────────
@@ -348,15 +348,31 @@ fun FileManagerScreen(
             confirmButton = {
                 Button(onClick = {
                     if (newName.isNotBlank()) {
-                        scope.launch(Dispatchers.IO) {
-                            val f = File(currentPath, newName)
-                            if (newIsFolder) f.mkdirs()
-                            else { f.parentFile?.mkdirs(); f.createNewFile() }
-                            withContext(Dispatchers.Main) {
-                                if (!newIsFolder) onOpenFile(f)
-                                showNewDialog = false
-                                newName = ""
-                                loadFiles()
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                try {
+                                    val targetFile = File(currentPath, newName)
+                                    if (newIsFolder) {
+                                        targetFile.mkdirs()
+                                        "folder"
+                                    } else {
+                                        targetFile.parentFile?.mkdirs()
+                                        if (!targetFile.exists()) targetFile.createNewFile()
+                                        "file"
+                                    }
+                                } catch (e: Exception) {
+                                    "error: ${e.message}"
+                                }
+                            }
+                            showNewDialog = false
+                            newName = ""
+                            // Reload files
+                            val reloadPath = currentPath
+                            currentPath = ""
+                            currentPath = reloadPath
+                            if (result == "file") {
+                                val newFile = File(currentPath, newName.ifBlank { "" })
+                                if (newFile.exists()) onOpenFile(newFile)
                             }
                         }
                     }
