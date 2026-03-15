@@ -2,6 +2,7 @@ package com.example.codedroid
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -15,7 +16,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -23,6 +23,7 @@ import com.example.codedroid.data.ThemePreference
 import com.example.codedroid.editor.EditorThemes
 import com.example.codedroid.ui.*
 import com.example.codedroid.ui.theme.CodeDroidTheme
+import android.net.Uri
 import com.example.codedroid.viewmodel.EditorViewModel
 import com.example.codedroid.viewmodel.TerminalViewModel
 import kotlinx.coroutines.launch
@@ -65,7 +66,36 @@ fun MainScreen() {
     val tabSize      by pref.tabSizeFlow.collectAsStateWithLifecycle(4)
     val editorTheme  by pref.editorThemeFlow.collectAsStateWithLifecycle("monokai")
 
-    var currentPage  by remember { mutableStateOf(NavPage.EDITOR) }
+    val currentPage  = remember { mutableStateOf(NavPage.EDITOR) }
+    val showExitDialog = remember { mutableStateOf(false) }
+
+    // Dialog Konfirmasi Keluar
+    if (showExitDialog.value) {
+        AlertDialog(
+            onDismissRequest = { showExitDialog.value = false },
+            title = { Text("Keluar Aplikasi") },
+            text  = { Text("Apakah Anda yakin ingin keluar dari CodeDroid?") },
+            confirmButton = {
+                Button(onClick = { (context as? ComponentActivity)?.finish() }) {
+                    Text("Keluar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExitDialog.value = false }) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+
+    // Tangani tombol kembali sistem
+    BackHandler {
+        if (drawerState.isOpen) {
+            scope.launch { drawerState.close() }
+        } else {
+            showExitDialog.value = true
+        }
+    }
 
     LaunchedEffect(fontSize)     { editorVM.fontSize.value     = fontSize }
     LaunchedEffect(wordWrap)     { editorVM.wordWrap.value     = wordWrap }
@@ -78,8 +108,8 @@ fun MainScreen() {
         drawerState   = drawerState,
         drawerContent = {
             AppDrawer(
-                currentPage   = currentPage,
-                onNavigate    = { currentPage = it },
+                currentPage   = currentPage.value,
+                onNavigate    = { currentPage.value = it },
                 onCloseDrawer = { scope.launch { drawerState.close() } },
                 fileName      = editorVM.fileName.value,
                 isModified    = editorVM.isModified.value
@@ -102,7 +132,7 @@ fun MainScreen() {
                                 Text(">", fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
                             }
                             // Tampilkan nama file di title
-                            if (currentPage == NavPage.EDITOR) {
+                            if (currentPage.value == NavPage.EDITOR) {
                                 Text(
                                     text     = (if (editorVM.isModified.value) "● " else "") + editorVM.fileName.value,
                                     fontSize = 10.sp,
@@ -112,19 +142,19 @@ fun MainScreen() {
                         }
                     },
                     actions = {
-                        when (currentPage) {
+                        when (currentPage.value) {
                             NavPage.EDITOR -> {
                                 if (editorVM.isModified.value) {
-                                    IconButton(onClick = { editorVM.saveFile() }) {
+                                    IconButton(onClick = { editorVM.saveFile(context) }) {
                                         Icon(Icons.Rounded.Save, "Simpan",
                                             tint = MaterialTheme.colorScheme.primary)
                                     }
                                 }
                                 IconButton(onClick = { editorVM.undo() }) {
-                                    Icon(Icons.Rounded.Undo, "Undo")
+                                    Icon(Icons.AutoMirrored.Rounded.Undo, "Undo")
                                 }
                                 IconButton(onClick = { editorVM.redo() }) {
-                                    Icon(Icons.Rounded.Redo, "Redo")
+                                    Icon(Icons.AutoMirrored.Rounded.Redo, "Redo")
                                 }
                                 IconButton(onClick = { editorVM.newFile() }) {
                                     Icon(Icons.Rounded.Add, "File Baru")
@@ -156,10 +186,10 @@ fun MainScreen() {
             }
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
-                when (currentPage) {
+                when (currentPage.value) {
                     NavPage.EDITOR -> EditorScreen(
                         content         = editorVM.content.value,
-                        onContentChange = { editorVM.updateContent(it) },
+                        onContentChange = { editorVM.updateContent(it, context) },
                         language        = editorVM.language.value,
                         theme           = EditorThemes.get(editorTheme),
                         fontSize        = fontSize,
@@ -167,27 +197,30 @@ fun MainScreen() {
                         showLineNumbers = showLineNums,
                         onUndo          = { editorVM.undo() },
                         onRedo          = { editorVM.redo() },
-                        onSave          = { editorVM.saveFile() }
+                        onSave          = { editorVM.saveFile(context) }
                     )
                     NavPage.FILES -> FileManagerScreen(
-                        onOpenFile   = { editorVM.openFile(it); currentPage = NavPage.EDITOR },
+                        onOpenFile   = { uri -> editorVM.openFile(uri, context); currentPage.value = NavPage.EDITOR },
                         onInsertCode = { code, _ ->
-                            editorVM.updateContent(editorVM.content.value + "\n" + code)
-                            currentPage = NavPage.EDITOR
+                            editorVM.updateContent(editorVM.content.value + "\n" + code, context)
+                            currentPage.value = NavPage.EDITOR
                         }
                     )
                     NavPage.PREVIEW -> {
                         // Preview sekarang ada di dalam editor — redirect ke editor
-                        currentPage = NavPage.EDITOR
+                        currentPage.value = NavPage.EDITOR
                     }
-                    NavPage.TERMINAL -> TerminalScreen(terminalVM.terminal)
+                    NavPage.TERMINAL -> TerminalScreen(terminalVM.terminalManager)
                     NavPage.FTP      -> FtpScreen(
-                        onOpenFile = { editorVM.openFile(it); currentPage = NavPage.EDITOR }
+                        onOpenFile = { file -> 
+                            editorVM.openFile(Uri.fromFile(file), context)
+                            currentPage.value = NavPage.EDITOR 
+                        }
                     )
                     NavPage.SNIPPETS -> SnippetsScreen(
                         onInsert = { code ->
-                            editorVM.updateContent(editorVM.content.value + code)
-                            currentPage = NavPage.EDITOR
+                            editorVM.updateContent(editorVM.content.value + code, context)
+                            currentPage.value = NavPage.EDITOR
                         }
                     )
                     NavPage.SETTINGS -> SettingsScreen(

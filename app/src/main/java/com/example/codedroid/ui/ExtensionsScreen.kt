@@ -17,39 +17,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.codedroid.data.ExtensionManager
-
-data class ExtensionInfo(
-    val id         : String,
-    val name       : String,
-    val description: String,
-    val detail     : String,
-    val version    : String,
-    val author     : String,
-    val color      : Color,
-    val category   : String
-)
-
-val allExtensions = listOf(
-    ExtensionInfo("prettier","Prettier","Auto-format kode otomatis","Format JS, HTML, CSS, JSON, Markdown dengan style konsisten","3.3.0","Prettier",Color(0xFFF7BA3E),"Formatter"),
-    ExtensionInfo("material-icon","Material Icon Theme","Icon file sesuai tipe","Tampilkan icon yang sesuai untuk setiap tipe file di file manager","5.0.0","PKief",Color(0xFF4CAF50),"Theme"),
-    ExtensionInfo("eslint","ESLint","Deteksi error JavaScript","Analisis kode JS/TS secara real-time dan tampilkan error","9.0.0","Microsoft",Color(0xFF4B32C3),"Linter"),
-    ExtensionInfo("error-lens","Error Lens","Error inline di kode","Tampilkan pesan error langsung di samping baris kode","3.16.0","usernamehw",Color(0xFFF44336),"UI"),
-    ExtensionInfo("php-intel","PHP Intelephense","Autocomplete PHP","Autocomplete, go-to-definition, dan diagnostik untuk PHP","1.12.0","Ben Mewburn",Color(0xFF6A1B9A),"Language"),
-    ExtensionInfo("laravel-extra","Laravel Extra Intellisense","Helper Laravel","Autocomplete untuk route, model, config, dan view Laravel","1.3.0","amir9480",Color(0xFFFF5722),"Framework"),
-    ExtensionInfo("blade-tools","Laravel Blade Snippets","Snippet Blade template","Snippet lengkap untuk direktif Blade Laravel","2.0.0","Winnie Lin",Color(0xFFE91E63),"Snippet"),
-    ExtensionInfo("auto-close","Auto Close Tag","Tutup tag otomatis","Otomatis menambahkan tag penutup HTML/XML saat mengetik","0.5.15","Jun Han",Color(0xFF00BCD4),"Editor"),
-    ExtensionInfo("one-dark-pro","One Dark Pro","Tema gelap profesional","Tema editor populer ala VS Code One Dark Pro","3.0.0","binaryify",Color(0xFF282C34),"Theme"),
-    ExtensionInfo("auto-rename","Auto Rename Tag","Rename tag serentak","Ubah tag pembuka, tag penutup otomatis ikut berubah","0.1.10","Jun Han",Color(0xFFFF9800),"Editor"),
-    ExtensionInfo("indent-rainbow","Indent Rainbow","Warna indentasi","Warna berbeda untuk setiap level indentasi kode","8.3.1","oderwat",Color(0xFF9C27B0),"Editor"),
-    ExtensionInfo("wakatime","WakaTime","Tracking waktu coding","Otomatis catat waktu coding dan tampilkan statistik","24.0.0","WakaTime",Color(0xFF00BFA5),"Productivity"),
-    ExtensionInfo("pets","CodeDroid Pets","Hewan peliharaan virtual","Teman coding — kucing/anjing animasi di editor kamu 🐱","1.0.0","CodeDroid",Color(0xFFFF80AB),"Fun"),
-    ExtensionInfo("codesnap","CodeSnap","Screenshot kode cantik","Buat screenshot kode dengan tampilan profesional + watermark","1.3.4","adpyke",Color(0xFF1565C0),"Utility"),
-    ExtensionInfo("img-preview","Image Preview","Preview gambar inline","Lihat preview gambar langsung saat hover path di kode","0.30.0","kisstkondoros",Color(0xFF2E7D32),"Editor"),
-)
+import com.example.codedroid.data.ExtensionInfo
+import com.example.codedroid.data.ExtensionsData
 
 @Composable
 fun ExtensionsScreen() {
     val context       = LocalContext.current
+    val allExtensions = ExtensionsData.allExtensions
     var installed     by remember { mutableStateOf(ExtensionManager.getInstalled(context)) }
     var searchQuery   by remember { mutableStateOf("") }
     var filterCategory by remember { mutableStateOf("Semua") }

@@ -4,11 +4,15 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import com.example.codedroid.terminal.TerminalManager
 
-class TerminalViewModel(app: Application) : AndroidViewModel(app) {
-    val terminal = TerminalManager(app.applicationContext)
+class TerminalViewModel(application: Application) : AndroidViewModel(application) {
+    val terminalManager = TerminalManager(application)
+
+    init {
+        terminalManager.startSession()
+    }
 
     override fun onCleared() {
         super.onCleared()
-        terminal.stop()
+        terminalManager.stopSession()
     }
 }

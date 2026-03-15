@@ -2,13 +2,13 @@
 
 <div align="center">
 
-![CodeDroid Banner](https://img.shields.io/badge/CodeDroid-v2.1.0-blue?style=for-the-badge&logo=android&logoColor=white)
+![CodeDroid Banner](https://img.shields.io/badge/CodeDroid-v2.3.1-blue?style=for-the-badge&logo=android&logoColor=white)
 ![Android](https://img.shields.io/badge/Android-8.0%2B-green?style=for-the-badge&logo=android)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0-purple?style=for-the-badge&logo=kotlin)
 ![Jetpack Compose](https://img.shields.io/badge/Jetpack_Compose-Material3-orange?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
-**Editor kode profesional untuk Android — powerful, ringan, dan lengkap.**
+**Editor kode profesional tercanggih untuk Android — powerful, cerdas, dan menyenangkan.**
 
 </div>
 
@@ -16,84 +16,42 @@
 
 ## 📱 Tentang CodeDroid
 
-CodeDroid adalah editor kode sumber terbuka yang dirancang khusus untuk Android. Dilengkapi dengan syntax highlighting, terminal Termux-style, live preview untuk web, Python runner dengan auto-install library, dan file manager lengkap dengan dukungan media — semua dalam satu aplikasi.
+CodeDroid adalah mobile IDE (Integrated Development Environment) yang dirancang khusus untuk pengembang Android yang membutuhkan efisiensi dan kekuatan di mana saja. Lebih dari sekadar editor teks, CodeDroid kini hadir dengan integrasi **AI (Artificial Intelligence)**, **Vibe Coding**, **Extension System**, dan fitur unik **Virtual Pets** untuk menemani Anda saat coding.
 
 ---
 
-## ✨ Fitur Utama
+## ✨ Fitur Utama (v2.3.1)
 
-### 🖊️ Editor Kode
-- **Syntax Highlighting** untuk 10+ bahasa: Kotlin, Java, Python, JavaScript, TypeScript, HTML, CSS, JSON, XML, Bash, Markdown
-- **6 Tema Editor**: Monokai, Darcula, GitHub, Dracula, Nord, Solarized
-- **Quick Toolbar** — akses cepat karakter spesial `{ } ( ) [ ] ; : = " ' < > / \ |`
-- **Undo / Redo** tidak terbatas
-- **Word Wrap** & **Nomor Baris** yang bisa diaktifkan/nonaktifkan
-- **Auto Save** opsional
-- **Tab Size** yang bisa dikonfigurasi (2 / 4 / 8 spasi)
-- **Status Bar** — tampilkan baris, kolom, jumlah karakter, bahasa, encoding
+### 🤖 AI Panel & Vibe Coding
+- **Multi-Provider AI**: Integrasi langsung dengan Claude (Anthropic), Gemini (Google), OpenAI, dan OpenRouter (DeepSeek, Qwen, Llama 3).
+- **Vibe Coding Mode**: Perintahkan AI untuk memodifikasi atau menulis kode secara langsung ke editor Anda (inline execution).
+- **Context Awareness**: Kirimkan potongan kode aktif Anda ke asisten AI untuk diagnosis atau refactoring instan.
 
-### 📁 File Manager
-- **Tampilan Grid & List** — beralih sesuai preferensi
-- **Thumbnail gambar** langsung tampil di daftar file
-- **Buka gambar** — full-screen image viewer tap-to-open
-- **Putar audio** — built-in player untuk MP3, WAV, OGG, M4A, FLAC
-- **Putar video** — redirect ke media player eksternal
-- **Long press media** → pilih format kode untuk sisipkan langsung ke editor (HTML tag, Markdown, CSS, Kotlin Uri, dll)
-- **Dukungan SD Card** — otomatis deteksi penyimpanan eksternal
-- **Pencarian file** real-time
-- **Buat file/folder** baru langsung dari aplikasi
-- **Quick extension chips** — `.kt .py .html .css .js .txt .java`
+### 🖊️ Editor Kode & Extensions
+- **Extension System**: Mendukung 125+ plugin fungsional, snippet library, dan tema premium.
+- **Syntax Highlighting**: Mendukung puluhan bahasa populer (Kotlin, Python, Java, JS/TS, HTML/CSS, dll).
+- **Material Icon Theme & Themes**: Ubah tampilan editor dengan tema populer seperti Monokai, Darcula, GitHub, Dracula, Nord, dan Solarized.
+- **Auto Close Tag & Rename Tag**: Mempercepat penulisan HTML/XML secara otomatis.
 
-### 🌐 Live Preview
-- **HTML/CSS** — render langsung di WebView built-in
-- **JavaScript** — output `console.log` tampil di console preview
-- **Markdown** — render jadi halaman HTML yang rapi
-- **Python** — auto-detect, langsung ke Python Runner
+### 🐈 CodeDroid Pets (Virtual Pets)
+- **Digital Companion**: Teman setia saat coding yang bisa berjalan, tidur, dan memberikan pesan motivasi/lucu.
+- **Interaktif**: Sentuh hewan peliharaan Anda untuk melihat reaksi yang berbeda-beda.
+- **Micro-Animations**: Didukung oleh Lottie & Compose Animations untuk pergerakan yang mulus.
 
-### 🐍 Python Runner
-- **Jalankan file Python** langsung dari editor — tap tombol ▶
-- **Auto-detect import** — scan semua `import` di kode
-- **Auto pip install** — library yang belum ada langsung diinstall otomatis
-- **Skip jika sudah ada** — tidak install ulang library yang sudah terinstall
-- **Output real-time** dengan color coding (sukses/error/warning)
-- **Error hints** — setiap error Python dijelaskan solusinya dalam Bahasa Indonesia
+### 🐍 Python Powerhouse
+- **Python Runner**: Jalankan skrip Python langsung dengan dukungan Chaquopy (Python 3.11).
+- **Python Library Browser**: Cari dan instal library dari **PyPI (Pip)** hanya dengan satu klik — tanpa ribet terminal.
+- **Auto-Pip**: Deteksi otomatis `import` yang hilang dan tawarkan instalasi otomatis.
 
-### 💻 Terminal Termux-Style
-- **Tampilan Catppuccin** — dark terminal yang nyaman di mata
-- **Shortcut bar** — tap langsung masukkan perintah umum (`ls`, `cd`, `python3`, `pip install`, dll)
-- **Navigasi history** ▲▼ — tekan panah untuk perintah sebelumnya
-- **Color-coded output** — prompt biru, sukses hijau, error merah, warning kuning
-- **Error hints otomatis** — setiap error langsung dikasih solusi dalam Bahasa Indonesia
-- **Perintah lengkap**: `ls`, `cd`, `pwd`, `mkdir`, `rm`, `cat`, `cp`, `mv`, `echo`, `date`, `whoami`, `uname`, `env`, `ping`, `python`, `pip`, `history`, `clear`
+### 📁 Advanced File Manager & Media
+- **Rich Preview**: Thumbnail gambar dan built-in player untuk Audio/Video.
+- **Drag-to-Code**: Konversi file media menjadi tag HTML, Markdown, atau Kotlin Uri dengan long-press.
+- **SD Card Support**: Akses penuh ke penyimpanan eksternal.
 
-### 📡 FTP Client
-- Koneksi ke server FTP
-- Browse direktori remote
-- Download file langsung ke editor
-- Support passive mode
-
-### 📝 Snippet Manager
-- Simpan potongan kode favorit
-- Kategorikan per bahasa
-- Sisipkan ke editor dengan satu tap
-- Edit & hapus snippet
-
-### ⚙️ Pengaturan Lengkap
-- Tema aplikasi: Gelap / Terang / Otomatis (ikut sistem)
-- Pilih tema editor dari 6 pilihan
-- Atur ukuran font (8–28sp)
-- Konfigurasi tab size
-- Toggle word wrap, nomor baris, auto save
-
----
-
-## 🎨 Navigation Bar Modern
-
-Navigation bar bawah yang animatif dengan:
-- **Dot indicator** pada tab aktif
-- **Warna unik** per tab (biru, kuning, hijau, cyan, ungu, hijau terminal, oranye)
-- **Animasi smooth** saat berpindah tab
-- **7 tab**: Editor · File · Preview · FTP · Snippet · Terminal · Pengaturan
+### 💻 Terminal & Live Preview
+- **Full Terminal**: Terminal Termux-style dengan tema Catppuccin, shortcut bar, dan history navigation.
+- **Web Preview**: Render HTML/CSS/JS secara real-time dengan Console Log viewer.
+- **Error Hints**: Penjelasan error coding dalam Bahasa Indonesia yang mudah dipahami.
 
 ---
 
@@ -114,164 +72,76 @@ cd CodeDroid
 
 ---
 
-## 📋 Persyaratan
+## 🛠️ Tech Stack & Library
 
-| Komponen | Versi Minimum |
-|----------|---------------|
-| Android  | 8.0 (API 26)  |
-| RAM      | 2 GB          |
-| Storage  | 50 MB         |
-
----
-
-## 🛠️ Tech Stack
-
-| Komponen | Library/Tool |
-|----------|-------------|
-| Language | Kotlin 2.0 |
-| UI | Jetpack Compose + Material3 |
-| Architecture | MVVM + ViewModel |
-| Storage | DataStore Preferences |
-| Image Loading | Coil Compose |
-| Media | AndroidX Media3 ExoPlayer |
-| Web Preview | AndroidX WebKit |
-| FTP | Apache Commons Net |
-| JSON | Gson |
-| Coroutines | Kotlinx Coroutines |
-| Build | Gradle 8.11.1 + AGP 8.7.2 |
+| Komponen | Teknologi/Library |
+|----------|-------------------|
+| **Language** | Kotlin 2.0 (K2 Compiler) |
+| **UI Framework** | Jetpack Compose (Material Design 3) |
+| **Python Runtime**| Chaquopy 15.0.1 (Python 3.11) |
+| **Animations** | Lottie Compose & Compose Motion |
+| **Image Loading** | Coil Compose |
+| **Networking** | OkHttp 4.12.0 & Apache Commons Net (FTP) |
+| **Media Player** | AndroidX Media3 (ExoPlayer) |
+| **Security** | AndroidX Security-Crypto |
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ Roadmap & History
 
-### ✅ v2.0.0
-- [x] Editor dasar dengan syntax highlighting
-- [x] 6 tema editor
-- [x] File manager dasar
-- [x] Terminal sederhana
-- [x] FTP client
-- [x] Snippet manager
-- [x] Pengaturan lengkap
+### ✅ v2.1.0 (Stabil)
+- [x] Modern Navigation Bar & Animation
+- [x] Full Media Manager Support
+- [x] Terminal Termux-Style
 
-### ✅ v2.1.0 (Sekarang)
-- [x] Navigation bar modern dengan animasi
-- [x] File manager lengkap (gambar, audio, video, SD card)
-- [x] Image viewer full-screen
-- [x] Audio player built-in
-- [x] Insert media ke editor (long press)
-- [x] Terminal Termux-style dengan Catppuccin theme
-- [x] Shortcut bar & history navigation
-- [x] Error hints dalam Bahasa Indonesia
-- [x] Live Preview (HTML/CSS/JS/Markdown)
-- [x] Python Runner dengan auto-install library
+### ✅ v2.2.0 (Update Besar)
+- [x] Extension System (125+ Plugins)
+- [x] CodeDroid Pets 🐱 (Virtual Pet Companion)
+- [x] UI/UX Refresh ke Material You (M3)
 
-### 🔜 v2.2.0 (Dalam Pengembangan)
-- [ ] Extension System
-  - [ ] Prettier (auto-format kode)
-  - [ ] Material Icon Theme
-  - [ ] ESLint (deteksi error JS/TS)
-  - [ ] Error Lens (error inline)
-  - [ ] PHP Intelephense
-  - [ ] Laravel Extra Intellisense
-  - [ ] Laravel Blade Snippets
-  - [ ] Auto Close Tag
-  - [ ] One Dark Pro theme
-  - [ ] Auto Rename Tag
-  - [ ] Indent Rainbow
-  - [ ] WakaTime
-  - [ ] CodeDroid Pets 🐱
-  - [ ] CodeSnap (screenshot kode)
-  - [ ] Image Preview inline
-- [ ] AI Panel (ChatGPT, Claude, DeepSeek, Kimi, Grok, Gemini, Qwen)
-- [ ] Python Library Browser (browse & install dari PyPI)
+### ✅ v2.3.1 (Rilis Terbaru - SEKARANG)
+- [x] **AI Panel**: Integrasi Claude, Gemini, OpenAI via OpenRouter
+- [x] **Vibe Coding**: AI Inline Code Editing
+- [x] **Python Library Browser**: Pip Graphical Manager
+- [x] **Improved Editor Performance**: Penanganan file besar lebih lancar
+
+### 🔜 v2.4.0 (Akan Datang)
+- [ ] Git Integration (Clone, Commit, Push, Pull)
+- [ ] Collaborative Coding (P2P Over Wi-Fi)
+- [ ] Full Desktop Mode (Support DeX & Android Desktop)
 
 ---
 
-## 📂 Struktur Project
+## 📂 Struktur Project (Current)
 
 ```
 app/src/main/java/com/example/codedroid/
-├── MainActivity.kt
-├── data/
-│   ├── ThemePreference.kt
-│   ├── SnippetManager.kt
-│   └── RecentFilesManager.kt
-├── editor/
-│   ├── EditorThemes.kt
-│   ├── SyntaxHighlighter.kt
-│   └── UndoRedoManager.kt
-├── network/
-│   └── FtpClient.kt
-├── terminal/
-│   ├── TerminalManager.kt
-│   └── TerminalSession.kt
-├── ui/
-│   ├── NavBar.kt
-│   ├── NavPage.kt
-│   ├── EditorScreen.kt
-│   ├── FileManagerScreen.kt
-│   ├── PreviewScreen.kt
-│   ├── FtpScreen.kt
-│   ├── SnippetsScreen.kt
-│   ├── TerminalScreen.kt
-│   ├── SettingsScreen.kt
-│   ├── QuickToolbar.kt
-│   ├── StatusBar.kt
-│   ├── TabBar.kt
-│   └── theme/
-│       ├── Color.kt
-│       ├── Theme.kt
-│       └── Type.kt
-└── viewmodel/
-    ├── EditorViewModel.kt
-    └── TerminalViewModel.kt
+├── data/           # Config, API Key Vault, & Managers
+├── editor/         # Core Editor, Themes, & Syntax Highlighter
+├── network/        # FTP & Network Client
+├── terminal/       # Terminal Logic & Session
+├── ui/             # Jetpack Compose Screens
+│   ├── AiPanel/    # AI Integration UI & Vibe Coding
+│   ├── Extensions/ # Plugins & Themes Manager
+│   ├── VirtualPet/ # Life Cycle Pet & Animation
+│   └── ...         # Editor, File, Preview, Settings
+└── viewmodel/      # Core Application Logic (MVVM)
 ```
 
 ---
 
-## 🤝 Kontribusi
+## 🤝 Kontribusi & Dukungan
 
-Kontribusi sangat disambut! Silakan:
-
-1. Fork repository ini
-2. Buat branch baru: `git checkout -b fitur/nama-fitur`
-3. Commit perubahan: `git commit -m 'Tambah fitur: nama-fitur'`
-4. Push ke branch: `git push origin fitur/nama-fitur`
-5. Buat Pull Request
-
----
-
-## 🐛 Laporan Bug
-
-Temukan bug? Buka [Issues](../../issues) dan sertakan:
-- Versi Android
-- Langkah reproduce
-- Screenshot (jika ada)
-- Log error (jika ada)
+Kontribusi sangat disambut! Jika Anda menemukan bug atau ingin menambahkan fitur (seperti pets baru atau extension), jangan ragu untuk:
+1. Fork Repository
+2. Buat Pull Request
+3. Buka Discussion
 
 ---
 
 ## 📄 Lisensi
 
-```
-MIT License
-
-Copyright (c) 2025 Ade Pratama
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-```
+Proyek ini berada di bawah lisensi **MIT**. Anda bebas menggunakan, memodifikasi, dan mendistribusikan kode ini sesuai dengan ketentuan yang berlaku.
 
 ---
 
@@ -283,14 +153,10 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 📧 luarnegriakun702@gmail.com
 
-*Dibuat dengan ❤️ menggunakan Kotlin & Jetpack Compose*
-
-</div>
+*Dibuat dengan ❤️ di Indonesia menggunakan Kotlin & Compose*
 
 ---
 
-<div align="center">
-
-⭐ **Jika CodeDroid membantu, jangan lupa kasih bintang!** ⭐
+⭐ **Jika Anda menyukai CodeDroid, berikan bintang di repository ini!** ⭐
 
 </div>

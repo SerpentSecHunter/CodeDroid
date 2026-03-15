@@ -1,5 +1,6 @@
 package com.example.codedroid.ui
 
+import android.content.Context
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
@@ -9,8 +10,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
@@ -26,8 +31,19 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import com.example.codedroid.editor.EditorTheme
 import com.example.codedroid.editor.SyntaxHighlighter
+import kotlinx.coroutines.launch
+
 
 @Composable
 fun EditorScreen(
@@ -42,15 +58,93 @@ fun EditorScreen(
     onRedo         : () -> Unit,
     onSave         : () -> Unit
 ) {
-    var tfv by remember(content) { mutableStateOf(TextFieldValue(content)) }
+    // Extensions State
+    val context    = LocalContext.current
+    val installedExts = remember { com.example.codedroid.data.ExtensionManager.getInstalled(context) }
+    val isAutoCloseActive = installedExts.contains("auto-close")
+    val isWakaTimeActive  = installedExts.contains("wakatime")
+    val isPetsActive      = installedExts.contains("pets")
+    
+    // Theme Override: Cari ekstensi tema yang sedang di-install, ubah ke EditorTheme yang sesuai
+    val activeTheme = remember(installedExts, theme) {
+        val themeExt = installedExts.find { it.startsWith("theme-") }
+        if (themeExt != null) {
+            val key = themeExt.removePrefix("theme-")
+            com.example.codedroid.editor.EditorThemes.get(key)
+        } else theme
+    }
+
+    // Fix Backspace: jangan reset tfv setiap kali content berubah dari luar
+    var tfv        by remember { mutableStateOf(TextFieldValue(content)) }
+    var lastExternal by remember { mutableStateOf(content) }
+
+    // Sync dari luar HANYA jika bukan dari user typing
+    LaunchedEffect(content) {
+        if (content != tfv.text && content != lastExternal) {
+            tfv = TextFieldValue(content, androidx.compose.ui.text.TextRange(content.length))
+            lastExternal = content
+        }
+    }
+
+    // Debounce sync ke ViewModel 500ms agar lebih aman saat mengetik cepat
+    LaunchedEffect(tfv.text) {
+        if (tfv.text != content) {
+            kotlinx.coroutines.delay(500)
+            onContentChange(tfv.text)
+        }
+    }
+
+    val canPreview  = language.lowercase() in listOf("html","htm","css","javascript","js","markdown","md")
+
+    // Fungsi intersepsi perubahan TextFieldValue (termasuk logika Ekstensi)
+    val handleTfvChange: (TextFieldValue) -> Unit = { newTfv ->
+        var finalTfv = newTfv
+
+        // =======================
+        // EXTENSION: AUTO-CLOSE TAG
+        // =======================
+        if (isAutoCloseActive && canPreview) {
+            val oldTxt = tfv.text
+            val newTxt = newTfv.text
+            val cursor = newTfv.selection.start
+            
+            // Jika user baru saja mengetik '>'
+            if (newTxt.length > oldTxt.length && cursor > 0 && newTxt[cursor - 1] == '>') {
+                // Cari kata sebelum '>' untuk menemukan tag, misal "div" dari "<div>"
+                val lastOpenBracket = newTxt.lastIndexOf('<', cursor - 2)
+                if (lastOpenBracket != -1) {
+                    val tagContent = newTxt.substring(lastOpenBracket + 1, cursor - 1)
+                    val tagName = tagContent.takeWhile { it.isLetterOrDigit() || it == '-' }
+                    
+                    // Pastikan bukan tag self-closing atau deklarasi
+                    val selfClosing = listOf("img", "br", "hr", "input", "meta", "link", "!--")
+                    if (tagName.isNotEmpty() && !tagName.startsWith("/") && tagName.lowercase() !in selfClosing) {
+                        val closeTag = "</$tagName>"
+                        // Sisipkan tag penutup setelah kursor, tanpa memindahkan kursor
+                        val modifiedTxt = newTxt.substring(0, cursor) + closeTag + newTxt.substring(cursor)
+                        finalTfv = TextFieldValue(modifiedTxt, androidx.compose.ui.text.TextRange(cursor))
+                    }
+                }
+            }
+        }
+        
+        tfv = finalTfv
+    }
+
     var showPreview by remember { mutableStateOf(false) }
     var findText    by remember { mutableStateOf("") }
     var showFind    by remember { mutableStateOf(false) }
-    val canPreview  = language.lowercase() in listOf("html","htm","css","javascript","js","markdown","md")
 
-    LaunchedEffect(tfv.text) {
-        if (tfv.text != content) onContentChange(tfv.text)
-    }
+    // AI state
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val clipManager = LocalClipboardManager.current
+    var aiError     by remember { mutableStateOf("") }
+
+    // Vibe Coding state
+    var showVibeDialog by remember { mutableStateOf(false) }
+    var vibePrompt     by remember { mutableStateOf("") }
+    var isVibeCoding   by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
 
@@ -105,6 +199,12 @@ fun EditorScreen(
                                        else MaterialTheme.colorScheme.onSurface.copy(0.5f))
                         }
                     }
+                    // Vibe Coding toggle
+                    IconButton(onClick = { showVibeDialog = true }, Modifier.size(32.dp)) {
+                        Icon(Icons.Rounded.SmartToy, "Vibe Code",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary)
+                    }
                 }
             }
         }
@@ -142,11 +242,114 @@ fun EditorScreen(
                         Text("$count hasil", fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.width(4.dp))
+                        // Cari Sebelumnya (Up)
+                        IconButton(onClick = {
+                            if (count > 0) {
+                                val currentIdx = tfv.selection.start
+                                var prevIdx = tfv.text.lastIndexOf(findText, currentIdx - 1, ignoreCase = true)
+                                if (prevIdx == -1) {
+                                    // Wrap around ke akhir
+                                    prevIdx = tfv.text.lastIndexOf(findText, ignoreCase = true)
+                                }
+                                if (prevIdx != -1) {
+                                    tfv = tfv.copy(selection = androidx.compose.ui.text.TextRange(prevIdx, prevIdx + findText.length))
+                                }
+                            }
+                        }, Modifier.size(28.dp)) {
+                            Icon(Icons.Rounded.KeyboardArrowUp, "Sebelumnya", Modifier.size(18.dp))
+                        }
+                        // Cari Selanjutnya (Down)
+                        IconButton(onClick = {
+                            if (count > 0) {
+                                val currentIdx = tfv.selection.end
+                                var nextIdx = tfv.text.indexOf(findText, currentIdx, ignoreCase = true)
+                                if (nextIdx == -1) {
+                                    // Wrap around ke awal
+                                    nextIdx = tfv.text.indexOf(findText, ignoreCase = true)
+                                }
+                                if (nextIdx != -1) {
+                                    tfv = tfv.copy(selection = androidx.compose.ui.text.TextRange(nextIdx, nextIdx + findText.length))
+                                }
+                            }
+                        }, Modifier.size(28.dp)) {
+                            Icon(Icons.Rounded.KeyboardArrowDown, "Selanjutnya", Modifier.size(18.dp))
+                        }
                     }
                     IconButton(onClick = { showFind = false; findText = "" }, Modifier.size(28.dp)) {
-                        Icon(Icons.Rounded.Close, null, Modifier.size(14.dp))
+                        Icon(Icons.Rounded.Close, "Tutup", Modifier.size(18.dp))
                     }
                 }
+            }
+        }
+
+        // ── Clipboard & action bar ────────────────────────────────────
+        Surface(color = MaterialTheme.colorScheme.surfaceContainer,
+            modifier = Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 2.dp, vertical = 0.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                EABtn("Copy", Icons.Rounded.ContentCopy) {
+                    val sel = tfv.selection
+                    val txt = if (sel.start != sel.end) tfv.text.substring(sel.start, sel.end)
+                    else {
+                        val ls = tfv.text.lastIndexOf('\n', sel.start - 1) + 1
+                        val le = tfv.text.indexOf('\n', sel.start).let { if (it < 0) tfv.text.length else it }
+                        tfv.text.substring(ls, le)
+                    }
+                    if (txt.isNotEmpty()) clipManager.setText(AnnotatedString(txt))
+                }
+                EABtn("Cut", Icons.Rounded.ContentCut) {
+                    val sel = tfv.selection
+                    if (sel.start != sel.end) {
+                        clipManager.setText(AnnotatedString(tfv.text.substring(sel.start, sel.end)))
+                        val new = tfv.text.substring(0, sel.start) + tfv.text.substring(sel.end)
+                        tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange(sel.start))
+                    }
+                }
+                EABtn("Paste", Icons.Rounded.ContentPaste) {
+                    val clip = clipManager.getText()?.text ?: ""
+                    if (clip.isNotEmpty()) {
+                        val sel = tfv.selection
+                        val new = tfv.text.substring(0, sel.start) + clip + tfv.text.substring(sel.end)
+                        tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange(sel.start + clip.length))
+                    }
+                }
+                EABtn("Hapus", Icons.Rounded.Backspace) {
+                    val sel = tfv.selection
+                    if (sel.start != sel.end) {
+                        // Hapus blok yang di-select
+                        val new = tfv.text.substring(0, sel.start) + tfv.text.substring(sel.end)
+                        tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange(sel.start))
+                    } else if (sel.start > 0) {
+                        // Hapus 1 karakter sebelum kursor (seperti backspace biasa)
+                        val new = tfv.text.substring(0, sel.start - 1) + tfv.text.substring(sel.end)
+                        tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange(sel.start - 1))
+                    }
+                }
+                EABtn("All", Icons.Rounded.SelectAll) {
+                    tfv = tfv.copy(selection = androidx.compose.ui.text.TextRange(0, tfv.text.length))
+                }
+                VerticalDivider(Modifier.height(18.dp).padding(horizontal = 2.dp))
+                EABtn("Undo", Icons.Rounded.Undo) { onUndo() }
+                EABtn("Redo", Icons.Rounded.Redo) { onRedo() }
+                VerticalDivider(Modifier.height(18.dp).padding(horizontal = 2.dp))
+                EABtn("→Tab", Icons.Rounded.FormatIndentIncrease) {
+                    val sel = tfv.selection
+                    val new = tfv.text.substring(0, sel.start) + "    " + tfv.text.substring(sel.end)
+                    tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange(sel.start + 4))
+                }
+                EABtn("Tab←", Icons.AutoMirrored.Rounded.FormatIndentDecrease) {
+                    val sel = tfv.selection
+                    val s   = tfv.text.lastIndexOf('\n', sel.start - 1) + 1
+                    if (tfv.text.substring(s).startsWith("    ")) {
+                        val new = tfv.text.removeRange(s, s + 4)
+                        tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange((sel.start - 4).coerceAtLeast(s)))
+                    }
+                }
+                VerticalDivider(Modifier.height(18.dp).padding(horizontal = 2.dp))
+                EABtn("Save", Icons.Rounded.Save) { onSave() }
             }
         }
 
@@ -168,62 +371,165 @@ fun EditorScreen(
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outline, thickness = 0.5.dp)
 
-        // ── Editor + Preview ──────────────────────────────────────
-        if (showPreview && canPreview) {
-            Row(Modifier.weight(1f).fillMaxWidth()) {
+        // ── Vibe Coding Loading Overlay ──────────────────────────────
+        if (isVibeCoding) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
+        }
+
+        // ── Vibe Coding Dialog ──────────────────────────────────────
+        if (showVibeDialog) {
+            AlertDialog(
+                onDismissRequest = { if (!isVibeCoding) showVibeDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.SmartToy, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text("AI Vibe Coding", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                },
+                text = {
+                    Column {
+                        Text("Apa yang ingin AI lakukan pada kode ini?", fontSize = 14.sp)
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = vibePrompt,
+                            onValueChange = { vibePrompt = it },
+                            placeholder = { Text("Contoh: Buatkan fungsi kalkulator...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 3,
+                            enabled = !isVibeCoding
+                        )
+                        if (aiError.isNotBlank() && isVibeCoding.not()) {
+                            Text(aiError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (vibePrompt.isNotBlank() && !isVibeCoding) {
+                                val pair = findActiveProvider(ctx)
+                                if (pair == null) {
+                                    aiError = "Pilih AI dan atur API Key di Panel AI dulu!"
+                                } else {
+                                    aiError = ""
+                                    scope.launch {
+                                        try {
+                                            val newCode = vibeCodeRequest(
+                                                ctx = ctx,
+                                                prov = pair.first,
+                                                srcIdx = pair.second,
+                                                currentCode = tfv.text,
+                                                prompt = vibePrompt,
+                                                onLoading = { isVibeCoding = it }
+                                            )
+                                            tfv = TextFieldValue(newCode)
+                                            showVibeDialog = false
+                                            vibePrompt = ""
+                                        } catch (e: Exception) {
+                                            aiError = e.message ?: "Terjadi kesalahan"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        enabled = vibePrompt.isNotBlank() && !isVibeCoding
+                    ) {
+                        if (isVibeCoding) {
+                            CircularProgressIndicator(Modifier.size(16.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text("Terapkan (Vibe)")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showVibeDialog = false }, enabled = !isVibeCoding) {
+                        Text("Batal")
+                    }
+                }
+            )
+        }
+        // ── Editor / Preview Area ──────────────────────────────────
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (showPreview && canPreview) {
+                var isDesktopMode by remember { mutableStateOf(false) }
+                var refreshKey    by remember { mutableStateOf(0) }
+
+                Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    // Preview Toolbar
+                    Surface(tonalElevation = 4.dp, color = MaterialTheme.colorScheme.surfaceContainer) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Rounded.Visibility, null, Modifier.size(16.dp), MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(8.dp))
+                            Text("PREVIEW", fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                            
+                            // Desktop Toggle
+                            IconButton(onClick = { isDesktopMode = !isDesktopMode }, Modifier.size(32.dp)) {
+                                Icon(
+                                    if (isDesktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.Smartphone,
+                                    "Desktop Mode",
+                                    Modifier.size(18.dp),
+                                    tint = if (isDesktopMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(0.6f)
+                                )
+                            }
+                            // Refresh
+                            IconButton(onClick = { refreshKey++ }, Modifier.size(32.dp)) {
+                                Icon(Icons.Rounded.Refresh, "Refresh", Modifier.size(18.dp))
+                            }
+                            // Close
+                            IconButton(onClick = { showPreview = false }, Modifier.size(32.dp)) {
+                                Icon(Icons.Rounded.Close, "Tutup", Modifier.size(18.dp))
+                            }
+                        }
+                    }
+
+                    Box(Modifier.fillMaxSize()) {
+                        key(refreshKey, isDesktopMode) {
+                            AndroidView(
+                                factory = { context ->
+                                    WebView(context).apply {
+                                        settings.javaScriptEnabled = true
+                                        settings.domStorageEnabled = true
+                                        settings.databaseEnabled   = true
+                                        webViewClient = WebViewClient()
+                                    }
+                                },
+                                update = { wv ->
+                                    val desktopUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                                    wv.settings.userAgentString = if (isDesktopMode) desktopUA else null
+                                    wv.settings.useWideViewPort = isDesktopMode
+                                    wv.settings.loadWithOverviewMode = isDesktopMode
+                                    
+                                    wv.loadDataWithBaseURL(null,
+                                        buildPreviewHtml(tfv.text, language), "text/html", "UTF-8", null)
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
+            } else {
                 EditorCore(
                     tfv             = tfv,
-                    onTfvChange     = { tfv = it },
-                    theme           = theme,
+                    onTfvChange     = handleTfvChange,
+                    theme           = activeTheme,
                     fontSize        = fontSize,
                     wordWrap        = wordWrap,
                     showLineNumbers = showLineNumbers,
                     highlightText   = findText,
-                    modifier        = Modifier.weight(1f).fillMaxHeight()
+                    modifier        = Modifier.fillMaxSize()
                 )
-                Box(
-                    modifier = Modifier
-                        .width(0.5.dp)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.outline)
-                )
-                Box(Modifier.weight(1f).fillMaxHeight()) {
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                webViewClient = WebViewClient()
-                            }
-                        },
-                        update  = { wv ->
-                            wv.loadDataWithBaseURL(null,
-                                buildPreviewHtml(tfv.text, language), "text/html", "UTF-8", null)
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Surface(
-                        color    = MaterialTheme.colorScheme.primary.copy(0.9f),
-                        shape    = RoundedCornerShape(bottomStart = 6.dp),
-                        modifier = Modifier.align(Alignment.TopEnd)
-                    ) {
-                        Text("PREVIEW", fontSize = 9.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                            color    = Color.White,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
-                    }
-                }
             }
-        } else {
-            EditorCore(
-                tfv             = tfv,
-                onTfvChange     = { tfv = it },
-                theme           = theme,
-                fontSize        = fontSize,
-                wordWrap        = wordWrap,
-                showLineNumbers = showLineNumbers,
-                highlightText   = findText,
-                modifier        = Modifier.weight(1f).fillMaxWidth()
-            )
+        }
+
+        // =======================
+        // EXTENSION: VIRTUAL PETS
+        // =======================
+        if (isPetsActive) {
+            VirtualPet(isActive = true, modifier = Modifier.padding(bottom = 2.dp))
         }
 
         // ── VS Code style status bar ──────────────────────────────
@@ -248,10 +554,28 @@ fun EditorScreen(
                 }
                 // Right
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // =======================
+                    // EXTENSION: WAKATIME
+                    // =======================
+                    if (isWakaTimeActive) {
+                        var sessionTime by remember { mutableStateOf(0) }
+                        LaunchedEffect(Unit) {
+                            while (true) {
+                                kotlinx.coroutines.delay(60000) // update tiap menit
+                                sessionTime++
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Timer, null, Modifier.size(11.dp), Color.White.copy(0.7f))
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (sessionTime > 0) "${sessionTime}m" else "< 1m", fontSize = 11.sp, color = Color.White.copy(0.9f))
+                        }
+                    }
+
                     Text(SyntaxHighlighter.getLanguageLabel(language),
                         fontSize = 11.sp, color = Color.White.copy(0.9f))
                     Text("UTF-8", fontSize = 11.sp, color = Color.White.copy(0.7f))
-                    Text("CodeDroid v2.3", fontSize = 10.sp, color = Color.White.copy(0.5f))
+                    Text("CodeDroid ✨", fontSize = 10.sp, color = Color.White.copy(0.5f))
                 }
             }
         }
@@ -274,33 +598,37 @@ private fun EditorCore(
 
     Box(modifier = modifier.background(theme.background)) {
         Row(Modifier.fillMaxSize()) {
-            // Line numbers
-            if (showLineNumbers) {
-                val lineCount = tfv.text.lines().size.coerceAtLeast(1)
-                Column(
-                    modifier = Modifier
-                        .width(48.dp)
-                        .fillMaxHeight()
-                        .background(theme.background.copy(0.95f))
-                        .border(end = 0.5.dp, color = theme.lineNumbers.copy(0.2f))
-                        .verticalScroll(vScroll)
-                        .padding(vertical = 4.dp)
-                ) {
-                    val currentLine = tfv.text.take(tfv.selection.start).count { it == '\n' } + 1
-                    repeat(lineCount) { i ->
-                        val lineNum = i + 1
-                        Text(
-                            text      = "$lineNum",
-                            fontSize  = (fontSize - 1).sp,
-                            fontFamily= FontFamily.Monospace,
-                            color     = if (lineNum == currentLine) theme.text.copy(0.8f)
-                                        else theme.lineNumbers,
-                            textAlign = TextAlign.End,
-                            modifier  = Modifier.fillMaxWidth().padding(end = 10.dp)
-                        )
+                // Line numbers
+                if (showLineNumbers) {
+                    val lineCount = tfv.text.lines().size.coerceAtLeast(1)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .background(theme.background.copy(0.95f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .width(48.dp)
+                                .verticalScroll(vScroll)
+                                .padding(vertical = 4.dp)
+                        ) {
+                            val currentLine = tfv.text.take(tfv.selection.start).count { it == '\n' } + 1
+                            repeat(lineCount) { i ->
+                                val lineNum = i + 1
+                                Text(
+                                    text      = "$lineNum",
+                                    fontSize  = (fontSize - 1).sp,
+                                    fontFamily= FontFamily.Monospace,
+                                    color     = if (lineNum == currentLine) theme.text.copy(0.8f)
+                                                else theme.lineNumbers,
+                                    textAlign = TextAlign.End,
+                                    modifier  = Modifier.fillMaxWidth().padding(end = 10.dp)
+                                )
+                            }
+                        }
+                        VerticalDivider(thickness = 0.5.dp, color = theme.lineNumbers.copy(0.2f))
                     }
                 }
-            }
 
             BasicTextField(
                 value         = tfv,
@@ -387,5 +715,18 @@ private fun buildPreviewHtml(content: String, language: String): String {
     }
 }
 
-// Extension function untuk Modifier border sisi tertentu
-private fun Modifier.border(end: androidx.compose.ui.unit.Dp, color: Color): Modifier = this
+// Extension function untuk mempermudah (hanya alias agar tidak error jika dipanggil)
+private fun Modifier.sideBorder(color: Color): Modifier = this
+
+@androidx.compose.runtime.Composable
+private fun EABtn(
+    label  : String,
+    icon   : androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit
+) {
+    IconButton(onClick = onClick, modifier = androidx.compose.ui.Modifier.size(34.dp)) {
+        Icon(icon, label,
+            modifier = androidx.compose.ui.Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+    }
+}

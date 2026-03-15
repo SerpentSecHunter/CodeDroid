@@ -5,29 +5,27 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
 object ApiKeyVault {
-    private const val FILE = "codedroid_api_keys"
+    private const val FILE = "codedroid_keys_v2"
 
-    private fun getPrefs(context: Context) = try {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+    private fun prefs(ctx: Context) = try {
+        val mk = MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
         EncryptedSharedPreferences.create(
-            context, FILE, masterKey,
+            ctx, FILE, mk,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
-    } catch (e: Exception) {
-        context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    } catch (_: Exception) {
+        ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
     }
 
-    fun save(context: Context, provider: String, key: String) =
-        getPrefs(context).edit().putString(provider, key).apply()
+    fun save(ctx: Context, key: String, value: String) =
+        prefs(ctx).edit().putString(key, value).apply()
 
-    fun get(context: Context, provider: String): String =
-        getPrefs(context).getString(provider, "") ?: ""
+    fun get(ctx: Context, key: String): String =
+        prefs(ctx).getString(key, "") ?: ""
 
-    fun delete(context: Context, provider: String) =
-        getPrefs(context).edit().remove(provider).apply()
+    fun delete(ctx: Context, key: String) =
+        prefs(ctx).edit().remove(key).apply()
 
-    fun hasKey(context: Context, provider: String): Boolean =
-        get(context, provider).isNotBlank()
+    fun hasKey(ctx: Context, key: String) = get(ctx, key).isNotBlank()
 }

@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    id("com.chaquo.python") version "15.0.1"
 }
 
 android {
@@ -12,9 +13,14 @@ android {
         applicationId             = "com.example.codedroid"
         minSdk                    = 26
         targetSdk                 = 35
-        versionCode               = 5
-        versionName               = "2.3.0"
+        versionCode               = 6
+        versionName               = "2.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Chaquopy — Python runtime
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -47,6 +53,16 @@ android {
             )
         }
     }
+
+    chaquopy {
+        defaultConfig {
+            version = "3.11"
+            buildPython("py", "-3.11")
+            pip {
+                install("requests")
+            }
+        }
+    }
 }
 
 dependencies {
@@ -66,6 +82,11 @@ dependencies {
     implementation(libs.gson)
     implementation(libs.kotlinx.coroutines)
 
+    // HTTP
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Encrypted prefs
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     // Media
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
@@ -75,11 +96,9 @@ dependencies {
     implementation(libs.webkit)
 
     // New dependencies for v2.2
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.airbnb.android:lottie-compose:6.4.0")
-    implementation("androidx.compose.material3:material3:1.3.1")
-
+    
+    implementation("androidx.documentfile:documentfile:1.0.1")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

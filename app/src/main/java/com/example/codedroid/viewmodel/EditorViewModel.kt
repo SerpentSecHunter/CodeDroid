@@ -1,6 +1,9 @@
 package com.example.codedroid.viewmodel
 
+import android.content.Context
+import android.net.Uri
 import androidx.compose.runtime.mutableStateOf
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.codedroid.editor.SyntaxHighlighter
@@ -8,12 +11,15 @@ import com.example.codedroid.editor.UndoRedoManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
+
+enum class InsertMode {
+    IMAGE, AUDIO, VIDEO
+}
 
 class EditorViewModel : ViewModel() {
     var content      = mutableStateOf("")
     var language     = mutableStateOf("text")
-    var currentFile  = mutableStateOf<File?>(null)
+    var currentUri   = mutableStateOf<Uri?>(null)
     var isModified   = mutableStateOf(false)
     var fileName     = mutableStateOf("Untitled")
 
@@ -29,11 +35,11 @@ class EditorViewModel : ViewModel() {
 
     private val undoRedo = UndoRedoManager()
 
-    fun updateContent(text: String) {
+    fun updateContent(text: String, context: Context? = null) {
         undoRedo.saveState(content.value)
         content.value  = text
         isModified.value = true
-        if (autoSave.value) saveFile()
+        if (autoSave.value && context != null) saveFile(context)
     }
 
     fun undo() {
@@ -44,34 +50,45 @@ class EditorViewModel : ViewModel() {
         undoRedo.redo()?.let { content.value = it }
     }
 
-    fun openFile(file: File) {
+    fun openFile(uri: Uri, context: Context) {
         viewModelScope.launch {
             val text = withContext(Dispatchers.IO) {
-                runCatching { file.readText() }.getOrDefault("")
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.use { 
+                        it.bufferedReader().readText() 
+                    } ?: ""
+                }.getOrDefault("")
             }
             content.value    = text
-            currentFile.value= file
-            fileName.value   = file.name
-            language.value   = SyntaxHighlighter.detectLanguage(file.name)
+            currentUri.value = uri
+            
+            // Dapatkan nama file dari DocumentFile atau Uri
+            val name = DocumentFile.fromSingleUri(context, uri)?.name ?: "Unknown"
+            fileName.value   = name
+            language.value   = SyntaxHighlighter.detectLanguage(name)
             isModified.value = false
             undoRedo.clear()
         }
     }
 
-    fun saveFile() {
-        val file = currentFile.value ?: return
+    fun saveFile(context: Context) {
+        val uri = currentUri.value ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { file.writeText(content.value) }
+            runCatching {
+                context.contentResolver.openOutputStream(uri, "wt")?.use { 
+                    it.bufferedWriter().use { writer -> writer.write(content.value) }
+                }
+            }
             isModified.value = false
         }
     }
 
     fun newFile() {
         content.value     = ""
-        currentFile.value = null
+        currentUri.value  = null
         fileName.value    = "Untitled"
         language.value    = "text"
         isModified.value  = false
         undoRedo.clear()
     }
-}
+}

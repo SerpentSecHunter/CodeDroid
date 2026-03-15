@@ -1,19 +1,20 @@
 package com.example.codedroid.ui
 
-import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
 import android.net.Uri
-import android.os.Environment
-import androidx.compose.animation.AnimatedVisibility
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.*
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,79 +33,174 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.documentfile.provider.DocumentFile
 import coil.compose.AsyncImage
+import com.example.codedroid.viewmodel.InsertMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import androidx.compose.ui.viewinterop.AndroidView
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-enum class InsertMode { IMAGE, AUDIO, VIDEO }
+data class FileEntry(
+    val uri: Uri,
+    val name: String,
+    val isDirectory: Boolean,
+    val size: Long = 0,
+    val lastModified: Long = 0,
+    val extension: String = ""
+)
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun FileManagerScreen(
-    onOpenFile  : (File) -> Unit,
+    onOpenFile  : (Uri) -> Unit,
     onInsertCode: ((String, InsertMode) -> Unit)? = null
 ) {
     val context     = LocalContext.current
     val scope       = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    var currentPath by remember { mutableStateOf(
-        Environment.getExternalStorageDirectory().absolutePath) }
-    var files       by remember { mutableStateOf<List<File>>(emptyList()) }
+    // Dapatkan path app-specific
+    val appFilesPath = remember { context.getExternalFilesDir(null)?.absolutePath ?: "" }
+    
+    // States untuk SAF
+    var internalStorageUri by remember { mutableStateOf<Uri?>(null) }
+    var sdCardUri by remember { mutableStateOf<Uri?>(null) }
+    var currentPath by remember { mutableStateOf(appFilesPath) } 
+    var isSafMode   by remember { mutableStateOf(false) }
+    
+    // Periksa storage yang sudah diberikan izin sebelumnya
+    LaunchedEffect(Unit) {
+        context.contentResolver.persistedUriPermissions.forEach { perm ->
+            val uri = perm.uri
+            if (uri.toString().contains("primary")) internalStorageUri = uri
+            else if (!uri.toString().contains("primary")) sdCardUri = uri
+        }
+        internalStorageUri?.let { currentPath = it.toString(); isSafMode = true }
+    }
+
+    var files       by remember { mutableStateOf<List<FileEntry>>(emptyList()) }
     var isLoading   by remember { mutableStateOf(false) }
-    var viewMode    by remember { mutableStateOf("list") }
+    var viewMode    by remember { mutableStateOf("list") } 
     var searchQuery by remember { mutableStateOf("") }
     var showSearch  by remember { mutableStateOf(false) }
     var showNewDialog by remember { mutableStateOf(false) }
     var newIsFolder by remember { mutableStateOf(false) }
     var newName     by remember { mutableStateOf("") }
+    var newNameError by remember { mutableStateOf("") }
+    var refreshKey  by remember { mutableStateOf(0) }
 
     // Media viewer states
-    var imageViewFile by remember { mutableStateOf<File?>(null) }
-    var mediaPlayFile by remember { mutableStateOf<File?>(null) }
-    var insertTarget  by remember { mutableStateOf<Pair<File, InsertMode>?>(null) }
+    var imageViewFile by remember { mutableStateOf<FileEntry?>(null) }
+    var audioViewFile by remember { mutableStateOf<FileEntry?>(null) }
+    var videoViewFile by remember { mutableStateOf<FileEntry?>(null) }
+    var insertTarget  by remember { mutableStateOf<Pair<FileEntry, InsertMode>?>(null) }
 
-    // Storage roots
-    val storageRoots = remember { getStorageRoots(context) }
+    // Operation states
+    var deleteTarget by remember { mutableStateOf<FileEntry?>(null) }
+    var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
+    var renameNewName by remember { mutableStateOf("") }
+    var renameError   by remember { mutableStateOf("") }
 
-    // Load files setiap kali currentPath berubah
+    // Launcher SAF
+    var pendingStorageType by remember { mutableStateOf<String?>(null) } 
+    val safPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let {
+            context.contentResolver.takePersistableUriPermission(
+                it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            if (pendingStorageType == "INTERNAL") internalStorageUri = it
+            else if (pendingStorageType == "SD") sdCardUri = it
+            currentPath = it.toString()
+            isSafMode = true
+        }
+    }
+
     fun loadFiles() {
         scope.launch {
             isLoading = true
             files = withContext(Dispatchers.IO) {
                 runCatching {
-                    File(currentPath).listFiles()
-                        ?.filter {
-                            if (searchQuery.isBlank()) true
-                            else it.name.contains(searchQuery, ignoreCase = true)
+                    val list = if (isSafMode) {
+                        val uri = Uri.parse(currentPath)
+                        val dir = DocumentFile.fromTreeUri(context, uri)
+                        dir?.listFiles()?.map {
+                            FileEntry(
+                                uri = it.uri,
+                                name = it.name ?: "",
+                                isDirectory = it.isDirectory,
+                                size = it.length(),
+                                lastModified = it.lastModified(),
+                                extension = it.name?.substringAfterLast('.', "") ?: ""
+                            )
                         }
-                        ?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-                        ?: emptyList()
-                }.getOrDefault(emptyList())
+                    } else {
+                        val dir = File(currentPath)
+                        dir.listFiles()?.map {
+                            FileEntry(
+                                uri = Uri.fromFile(it),
+                                name = it.name,
+                                isDirectory = it.isDirectory,
+                                size = it.length(),
+                                lastModified = it.lastModified(),
+                                extension = it.extension
+                            )
+                        }
+                    }
+                    list?.filter {
+                        if (searchQuery.isBlank()) true
+                        else it.name.contains(searchQuery, ignoreCase = true)
+                    }?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                    ?: emptyList()
+                }.getOrElse { 
+                    it.printStackTrace()
+                    emptyList() 
+                }
             }
             isLoading = false
         }
     }
 
-    LaunchedEffect(currentPath) { loadFiles() }
+    LaunchedEffect(currentPath, refreshKey) { loadFiles() }
     LaunchedEffect(searchQuery) { if (searchQuery.isNotBlank()) loadFiles() }
 
     Column(Modifier.fillMaxSize()) {
-        // ── Top bar ──────────────────────────────────────────────
         Surface(tonalElevation = 2.dp) {
             Column {
                 Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 2.dp),
+                    modifier = Modifier.fillMaxWidth().padding(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = {
-                        val parent = File(currentPath).parentFile
-                        if (parent != null && parent.canRead()) {
-                            currentPath = parent.absolutePath
+                        if (isSafMode) {
+                            val uri = Uri.parse(currentPath)
+                            val isRoot = (uri == internalStorageUri || uri == sdCardUri)
+                            if (isRoot) {
+                                currentPath = appFilesPath
+                                isSafMode = false
+                            } else {
+                                val doc = DocumentFile.fromSingleUri(context, uri)
+                                val parent = doc?.parentFile
+                                if (parent != null) {
+                                    currentPath = parent.uri.toString()
+                                } else {
+                                    currentPath = appFilesPath
+                                    isSafMode = false
+                                }
+                            }
+                        } else {
+                            val parentFile = File(currentPath).parentFile
+                            if (parentFile != null && parentFile.absolutePath.startsWith(appFilesPath)) {
+                                currentPath = parentFile.absolutePath
+                            } else if (parentFile != null && parentFile.absolutePath == "/") {
+                                scope.launch { snackbarHostState.showSnackbar("Sudah di folder awal") }
+                            }
                         }
                     }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Kembali")
@@ -112,188 +208,161 @@ fun FileManagerScreen(
 
                     if (showSearch) {
                         OutlinedTextField(
-                            value         = searchQuery,
+                            value = searchQuery,
                             onValueChange = { searchQuery = it },
-                            placeholder   = { Text("Cari file...") },
-                            singleLine    = true,
-                            modifier      = Modifier.weight(1f).height(46.dp),
-                            shape         = RoundedCornerShape(12.dp)
+                            placeholder = { Text("Cari...") },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = RoundedCornerShape(12.dp)
                         )
                         IconButton(onClick = { showSearch = false; searchQuery = "" }) {
-                            Icon(Icons.Rounded.Close, "Tutup")
+                            Icon(Icons.Rounded.Close, null)
                         }
                     } else {
                         Column(Modifier.weight(1f)) {
-                            Text(
-                                text = File(currentPath).name.ifEmpty { "Storage" },
-                                fontSize   = 15.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines   = 1,
-                                overflow   = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text  = currentPath,
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(0.4f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            val displayName = if (isSafMode) {
+                                val uri = Uri.parse(currentPath)
+                                val doc = if (uri == internalStorageUri || uri == sdCardUri) {
+                                    DocumentFile.fromTreeUri(context, uri)
+                                } else {
+                                    DocumentFile.fromSingleUri(context, uri)
+                                }
+                                doc?.name ?: "Penyimpanan Utama"
+                            } else {
+                                File(currentPath).name.ifEmpty { "Penyimpanan Utama" }
+                            }
+                            Text(displayName, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Text(currentPath, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface.copy(0.6f))
                         }
-                        IconButton(onClick = { showSearch = true }) {
-                            Icon(Icons.Rounded.Search, "Cari")
+                        IconButton(onClick = { refreshKey++ }) { Icon(Icons.Rounded.Refresh, "Muat Ulang") }
+                        IconButton(onClick = { showSearch = true }) { Icon(Icons.Rounded.Search, "Cari") }
+                        IconButton(onClick = { viewMode = if (viewMode == "list") "grid" else "list" }) {
+                            Icon(if (viewMode == "list") Icons.Rounded.GridView else Icons.AutoMirrored.Rounded.List, "Ganti Tampilan")
                         }
-                        IconButton(onClick = {
-                            viewMode = if (viewMode == "list") "grid" else "list"
-                        }) {
-                            Icon(
-                                if (viewMode == "list") Icons.Rounded.GridView
-                                else Icons.Rounded.List,
-                                "Mode"
-                            )
-                        }
-                        IconButton(onClick = { newIsFolder = false; showNewDialog = true }) {
-                            Icon(Icons.Rounded.Add, "Baru",
-                                tint = MaterialTheme.colorScheme.primary)
-                        }
-                        IconButton(onClick = { newIsFolder = true; showNewDialog = true }) {
-                            Icon(Icons.Rounded.CreateNewFolder, "Folder Baru",
-                                tint = MaterialTheme.colorScheme.secondary)
-                        }
+                        IconButton(onClick = { newIsFolder = false; showNewDialog = true }) { Icon(Icons.Rounded.Add, "Tambah File", tint = MaterialTheme.colorScheme.primary) }
+                        IconButton(onClick = { newIsFolder = true; showNewDialog = true }) { Icon(Icons.Rounded.CreateNewFolder, "Tambah Folder", tint = MaterialTheme.colorScheme.secondary) }
                     }
                 }
 
-                // Storage root chips
                 Row(
-                    modifier = Modifier
-                        .horizontalScroll(rememberScrollState())
-                        .padding(start = 12.dp, bottom = 6.dp, end = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    modifier = Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    storageRoots.forEach { (path, label) ->
-                        val isActive = currentPath.startsWith(path)
-                        FilterChip(
-                            selected = isActive,
-                            onClick  = { currentPath = path },
-                            label    = { Text(label, fontSize = 11.sp) },
-                            leadingIcon = {
-                                Icon(
-                                    if (label == "Internal") Icons.Rounded.PhoneAndroid
-                                    else Icons.Rounded.SdCard,
-                                    null, Modifier.size(14.dp)
-                                )
+                    FilterChip(
+                        selected = isSafMode && currentPath == internalStorageUri?.toString(),
+                        onClick = {
+                            if (internalStorageUri != null) {
+                                currentPath = internalStorageUri.toString()
+                                isSafMode = true
+                            } else {
+                                pendingStorageType = "INTERNAL"
+                                safPicker.launch(null)
                             }
-                        )
-                    }
+                        },
+                        label = { Text("Penyimpanan Internal") },
+                        leadingIcon = { Icon(Icons.Rounded.Storage, null, Modifier.size(16.dp)) }
+                    )
+
+                    FilterChip(
+                        selected = isSafMode && currentPath == sdCardUri?.toString(),
+                        onClick = {
+                            if (sdCardUri != null) {
+                                currentPath = sdCardUri.toString()
+                                isSafMode = true
+                            } else {
+                                pendingStorageType = "SD"
+                                safPicker.launch(null)
+                            }
+                        },
+                        label = { Text("Kartu SD") },
+                        leadingIcon = { Icon(Icons.Rounded.SdCard, null, Modifier.size(16.dp)) }
+                    )
+
+                    FilterChip(
+                        selected = !isSafMode && currentPath.startsWith(appFilesPath),
+                        onClick = { currentPath = appFilesPath; isSafMode = false },
+                        label = { Text("File Aplikasi") },
+                        leadingIcon = { Icon(Icons.Rounded.FolderOpen, null, Modifier.size(16.dp)) }
+                    )
                 }
             }
         }
 
         HorizontalDivider()
 
-        // ── Content ───────────────────────────────────────────────
-        when {
-            isLoading -> {
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            }
-            files.isEmpty() -> {
+        Box(Modifier.weight(1f)) {
+            if (isLoading) {
+                Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
+            } else if (files.isEmpty()) {
                 Box(Modifier.fillMaxSize(), Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Rounded.FolderOpen, null,
-                            modifier = Modifier.size(48.dp),
-                            tint     = MaterialTheme.colorScheme.onSurface.copy(0.2f))
-                        Spacer(Modifier.height(8.dp))
-                        Text("Folder kosong",
-                            color = MaterialTheme.colorScheme.onSurface.copy(0.4f))
+                        Icon(Icons.Rounded.FolderOpen, null, Modifier.size(64.dp), tint = Color.Gray.copy(0.3f))
+                        Text("Folder kosong", color = Color.Gray)
                     }
                 }
-            }
-            viewMode == "grid" -> {
-                LazyVerticalGrid(
-                    columns        = GridCells.Adaptive(100.dp),
-                    modifier       = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement   = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(files, key = { it.absolutePath }) { file ->
-                        FileGridItem(
-                            file = file,
-                            onClick = {
-                                handleFileClick(
-                                    file, onOpenFile,
-                                    { imageViewFile = it },
-                                    { mediaPlayFile = it },
-                                    { currentPath  = it.absolutePath }
-                                )
-                            },
-                            onLongClick = {
-                                handleLongClick(file, onInsertCode) { insertTarget = it }
-                            }
-                        )
+            } else {
+                if (viewMode == "list") {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        items(files, key = { it.uri.toString() }) { file ->
+                            FileListItem(
+                                file = file,
+                                onClick = {
+                                    handleFileClick(
+                                        file, onOpenFile,
+                                        { imageViewFile = it },
+                                        { audioViewFile = it },
+                                        { videoViewFile = it },
+                                        { currentPath = it.uri.toString() }
+                                    )
+                                },
+                                onLongClick = {
+                                    handleLongClick(file, onInsertCode) { insertTarget = it }
+                                },
+                                onRename = {
+                                    renameTarget = file
+                                    renameNewName = file.name
+                                },
+                                onDelete = {
+                                    deleteTarget = file
+                                }
+                            )
+                            HorizontalDivider(
+                                modifier = Modifier.padding(start = 58.dp),
+                                thickness = 0.4.dp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(0.06f)
+                            )
+                        }
                     }
-                }
-            }
-            else -> {
-                LazyColumn(Modifier.fillMaxSize()) {
-                    items(files, key = { it.absolutePath }) { file ->
-                        FileListItem(
-                            file = file,
-                            onClick = {
-                                handleFileClick(
-                                    file, onOpenFile,
-                                    { imageViewFile = it },
-                                    { mediaPlayFile = it },
-                                    { currentPath  = it.absolutePath }
-                                )
-                            },
-                            onLongClick = {
-                                handleLongClick(file, onInsertCode) { insertTarget = it }
-                            }
-                        )
-                        HorizontalDivider(
-                            modifier  = Modifier.padding(start = 58.dp),
-                            thickness = 0.4.dp,
-                            color     = MaterialTheme.colorScheme.onSurface.copy(0.06f)
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Image Viewer ──────────────────────────────────────────────
-    imageViewFile?.let { img ->
-        Dialog(
-            onDismissRequest = { imageViewFile = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Box(Modifier.fillMaxSize().background(Color.Black).clickable { imageViewFile = null }) {
-                AsyncImage(
-                    model              = img,
-                    contentDescription = img.name,
-                    modifier           = Modifier.fillMaxSize(),
-                    contentScale       = ContentScale.Fit
-                )
-                // Info bar
-                Surface(
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
-                    color    = Color.Black.copy(0.6f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(100.dp),
+                        contentPadding = PaddingValues(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxSize()
                     ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(img.name, color = Color.White, fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium)
-                            Text(formatFileSize(img.length()), color = Color.White.copy(0.6f),
-                                fontSize = 11.sp)
-                        }
-                        IconButton(onClick = { imageViewFile = null }) {
-                            Icon(Icons.Rounded.Close, null, tint = Color.White)
+                        items(files, key = { it.uri.toString() }) { file ->
+                            FileGridItem(
+                                file = file,
+                                onClick = {
+                                    handleFileClick(
+                                        file, onOpenFile,
+                                        { imageViewFile = it },
+                                        { audioViewFile = it },
+                                        { videoViewFile = it },
+                                        { currentPath = it.uri.toString() }
+                                    )
+                                },
+                                onLongClick = {
+                                    handleLongClick(file, onInsertCode) { insertTarget = it }
+                                },
+                                onRename = {
+                                    renameTarget = file
+                                    renameNewName = file.name
+                                },
+                                onDelete = {
+                                    deleteTarget = file
+                                }
+                            )
                         }
                     }
                 }
@@ -301,511 +370,385 @@ fun FileManagerScreen(
         }
     }
 
-    // ── Media Player ──────────────────────────────────────────────
-    mediaPlayFile?.let { mFile ->
-        MediaPlayerDialog(file = mFile, onDismiss = { mediaPlayFile = null })
+    // ── Dialogs ──────────────────────────────────────────────────────
+
+    imageViewFile?.let { img ->
+        Dialog(onDismissRequest = { imageViewFile = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Box(Modifier.fillMaxSize().background(Color.Black).clickable { imageViewFile = null }) {
+                AsyncImage(model = img.uri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                Surface(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(), color = Color.Black.copy(0.6f)) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(img.name, color = Color.White, fontSize = 14.sp)
+                            Text(formatFileSize(img.size), color = Color.White.copy(0.6f), fontSize = 11.sp)
+                        }
+                        IconButton(onClick = { imageViewFile = null }) { Icon(Icons.Rounded.Close, null, tint = Color.White) }
+                    }
+                }
+            }
+        }
     }
 
-    // ── Insert Code Dialog ────────────────────────────────────────
+    audioViewFile?.let { mFile -> MediaPlayerDialog(file = mFile, onDismiss = { audioViewFile = null }) }
+    videoViewFile?.let { vFile -> VideoPlayerDialog(file = vFile, onDismiss = { videoViewFile = null }) }
+
     insertTarget?.let { (file, mode) ->
-        InsertCodeDialog(
-            file      = file,
-            mode      = mode,
-            onInsert  = { tag -> onInsertCode?.invoke(tag, mode); insertTarget = null },
-            onDismiss = { insertTarget = null }
-        )
+        InsertCodeDialog(file = file, mode = mode, onInsert = { tag -> onInsertCode?.invoke(tag, mode); insertTarget = null }, onDismiss = { insertTarget = null })
     }
 
-    // ── New File/Folder Dialog ─────────────────────────────────────
     if (showNewDialog) {
         AlertDialog(
-            onDismissRequest = { showNewDialog = false; newName = "" },
-            title = { Text(if (newIsFolder) "Folder Baru" else "File Baru") },
-            text  = {
+            onDismissRequest = { showNewDialog = false; newName = ""; newNameError = "" },
+            title = { Text(if (newIsFolder) "Buat Folder" else "Buat File") },
+            text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value         = newName,
-                        onValueChange = { newName = it },
-                        label         = { Text("Nama") },
-                        singleLine    = true,
-                        modifier      = Modifier.fillMaxWidth()
+                        value = newName,
+                        onValueChange = { newName = it; newNameError = "" },
+                        label = { Text("Nama") },
+                        isError = newNameError.isNotEmpty(),
+                        supportingText = if (newNameError.isNotEmpty()) { { Text(newNameError) } } else null,
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    if (!newIsFolder) {
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf("kt","py","html","css","js","php","java","txt","json","xml","md").forEach { ext ->
-                                SuggestionChip(
-                                    onClick = { newName = newName.substringBefore('.') + ".$ext" },
-                                    label   = { Text(".$ext", fontSize = 10.sp) }
-                                )
-                            }
-                        }
-                    }
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    if (newName.isNotBlank()) {
-                        scope.launch {
-                            val result = withContext(Dispatchers.IO) {
-                                try {
-                                    val targetFile = File(currentPath, newName)
-                                    if (newIsFolder) {
-                                        targetFile.mkdirs()
-                                        "folder"
-                                    } else {
-                                        targetFile.parentFile?.mkdirs()
-                                        if (!targetFile.exists()) targetFile.createNewFile()
-                                        "file"
-                                    }
-                                } catch (e: Exception) {
-                                    "error: ${e.message}"
+                    val trimName = newName.trim()
+                    if (trimName.isEmpty()) { newNameError = "Nama kosong"; return@Button }
+                    val path = currentPath
+                    val isSaf = isSafMode
+                    showNewDialog = false
+                    newName = ""
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            runCatching {
+                                if (isSaf) {
+                                    val parent = DocumentFile.fromTreeUri(context, Uri.parse(path))
+                                    if (newIsFolder) parent?.createDirectory(trimName) != null
+                                    else parent?.createFile("application/octet-stream", trimName) != null
+                                } else {
+                                    val target = File(path, trimName)
+                                    if (newIsFolder) target.mkdirs() else target.createNewFile()
                                 }
-                            }
-                            showNewDialog = false
-                            newName = ""
-                            // Reload files
-                            val reloadPath = currentPath
-                            currentPath = ""
-                            currentPath = reloadPath
-                            if (result == "file") {
-                                val newFile = File(currentPath, newName.ifBlank { "" })
-                                if (newFile.exists()) onOpenFile(newFile)
-                            }
+                            }.getOrElse { false }
                         }
+                        if (ok) refreshKey++ else snackbarHostState.showSnackbar("Gagal membuat")
                     }
                 }) { Text("Buat") }
             },
-            dismissButton = {
-                TextButton(onClick = { showNewDialog = false; newName = "" }) { Text("Batal") }
-            }
+            dismissButton = { TextButton(onClick = { showNewDialog = false }) { Text("Batal") } }
         )
     }
+
+    renameTarget?.let { file ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null; renameNewName = ""; renameError = "" },
+            title = { Text("Ubah Nama") },
+            text = {
+                OutlinedTextField(
+                    value = renameNewName,
+                    onValueChange = { renameNewName = it; renameError = "" },
+                    label = { Text("Nama Baru") },
+                    isError = renameError.isNotEmpty(),
+                    supportingText = if (renameError.isNotEmpty()) { { Text(renameError) } } else null,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val trimName = renameNewName.trim()
+                    if (trimName.isEmpty()) { renameError = "Nama tidak boleh kosong"; return@Button }
+                    if (trimName == file.name) { renameTarget = null; return@Button }
+                    val isSaf = isSafMode
+                    val targetFile = file
+                    renameTarget = null
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            runCatching {
+                                if (isSaf) {
+                                    val doc = DocumentFile.fromSingleUri(context, targetFile.uri)
+                                    doc?.renameTo(trimName) == true
+                                } else {
+                                    val f = File(targetFile.uri.path ?: "")
+                                    val dest = File(f.parentFile, trimName)
+                                    f.renameTo(dest)
+                                }
+                            }.getOrElse { false }
+                        }
+                        if (ok) {
+                            refreshKey++
+                            snackbarHostState.showSnackbar("Berhasil mengubah nama")
+                        } else {
+                            snackbarHostState.showSnackbar("Gagal mengubah nama")
+                        }
+                        renameNewName = ""
+                    }
+                }) { Text("Simpan") }
+            },
+            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Batal") } }
+        )
+    }
+
+    deleteTarget?.let { file ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Hapus ${if (file.isDirectory) "Folder" else "File"}") },
+            text = { Text("Apakah Anda yakin ingin menghapus '${file.name}'? Tindakan ini tidak dapat dibatalkan.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val isSaf = isSafMode
+                        val targetFile = file
+                        deleteTarget = null
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    if (isSaf) {
+                                        val doc = DocumentFile.fromSingleUri(context, targetFile.uri)
+                                        doc?.delete() == true
+                                    } else {
+                                        val f = File(targetFile.uri.path ?: "")
+                                        if (f.isDirectory) f.deleteRecursively() else f.delete()
+                                    }
+                                }.getOrElse { false }
+                            }
+                            if (ok) {
+                                refreshKey++
+                                snackbarHostState.showSnackbar("Berhasil menghapus")
+                            } else {
+                                snackbarHostState.showSnackbar("Gagal menghapus")
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Hapus", color = MaterialTheme.colorScheme.onError) }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Batal") } }
+        )
+    }
+
+    Box(Modifier.fillMaxSize(), Alignment.BottomCenter) { SnackbarHost(snackbarHostState) }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
 
-private fun getStorageRoots(context: Context): List<Pair<String, String>> {
-    val roots = mutableListOf<Pair<String, String>>()
-    roots.add(Environment.getExternalStorageDirectory().absolutePath to "Internal")
-    try {
-        context.getExternalFilesDirs(null).forEachIndexed { i, f ->
-            if (i > 0 && f != null) {
-                val sdPath = f.absolutePath.split("/Android")[0]
-                if (File(sdPath).exists()) roots.add(sdPath to "SD Card")
-            }
-        }
-    } catch (_: Exception) {}
-    return roots
-}
-
 private fun handleFileClick(
-    file      : File,
-    onOpenFile: (File) -> Unit,
-    showImage : (File) -> Unit,
-    showMedia : (File) -> Unit,
-    openFolder: (File) -> Unit
+    file: FileEntry, 
+    onOpenFile: (Uri) -> Unit, 
+    showImg: (FileEntry) -> Unit, 
+    showAudio: (FileEntry) -> Unit, 
+    showVideo: (FileEntry) -> Unit,
+    openFolder: (FileEntry) -> Unit
 ) {
-    when {
-        file.isDirectory -> openFolder(file)  // ← MASUK KE FOLDER
-        file.extension.lowercase() in listOf("jpg","jpeg","png","gif","webp","bmp") -> showImage(file)
-        file.extension.lowercase() in listOf("mp3","wav","ogg","m4a","aac","flac") -> showMedia(file)
-        file.extension.lowercase() in listOf("mp4","mkv","avi","mov","webm","3gp") -> showMedia(file)
-        else -> onOpenFile(file)
+    if (file.isDirectory) openFolder(file)
+    else {
+        val ext = file.extension.lowercase()
+        when {
+            ext in listOf("jpg","jpeg","png","gif","webp") -> showImg(file)
+            ext in listOf("mp3","wav","m4a","ogg") -> showAudio(file)
+            ext in listOf("mp4","mkv","webm","3gp") -> showVideo(file)
+            else -> onOpenFile(file.uri)
+        }
     }
 }
 
-private fun handleLongClick(
-    file     : File,
-    onInsert : ((String, InsertMode) -> Unit)?,
-    setTarget: (Pair<File, InsertMode>) -> Unit
-) {
+private fun handleLongClick(file: FileEntry, onInsert: ((String, InsertMode) -> Unit)?, setTarget: (Pair<FileEntry, InsertMode>) -> Unit) {
     if (onInsert == null || file.isDirectory) return
     val mode = when (file.extension.lowercase()) {
-        in listOf("jpg","jpeg","png","gif","webp","bmp") -> InsertMode.IMAGE
-        in listOf("mp3","wav","ogg","m4a","aac","flac") -> InsertMode.AUDIO
-        in listOf("mp4","mkv","avi","mov","webm","3gp") -> InsertMode.VIDEO
+        in listOf("jpg","jpeg","png") -> InsertMode.IMAGE
+        in listOf("mp3","wav") -> InsertMode.AUDIO
+        in listOf("mp4","mkv") -> InsertMode.VIDEO
         else -> return
     }
     setTarget(file to mode)
 }
 
-// ── FileListItem ──────────────────────────────────────────────────
-
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun FileListItem(file: File, onClick: () -> Unit, onLongClick: () -> Unit) {
-    val ext = file.extension.lowercase()
-    val (icon, color) = getFileIconColor(file)
-    val isImage = ext in listOf("jpg","jpeg","png","gif","webp","bmp")
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Thumbnail / icon
-        if (isImage) {
-            AsyncImage(
-                model             = file,
-                contentDescription= null,
-                modifier          = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)),
-                contentScale      = ContentScale.Crop
-            )
-        } else {
-            Box(
-                modifier         = Modifier.size(44.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(color.copy(0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(icon, null, tint = color, modifier = Modifier.size(24.dp))
-            }
-        }
-
-        Spacer(Modifier.width(12.dp))
-
-        Column(Modifier.weight(1f)) {
-            Text(file.name, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    if (file.isDirectory) {
-                        val count = file.listFiles()?.size ?: 0
-                        "$count item"
-                    } else formatFileSize(file.length()),
-                    fontSize = 11.sp,
-                    color    = MaterialTheme.colorScheme.onSurface.copy(0.45f)
-                )
-                if (!file.isDirectory) {
-                    Text(
-                        SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
-                            .format(Date(file.lastModified())),
-                        fontSize = 11.sp,
-                        color    = MaterialTheme.colorScheme.onSurface.copy(0.3f)
-                    )
-                }
-            }
-        }
-
-        // Play icon untuk media
-        if (ext in listOf("mp3","wav","ogg","m4a","mp4","mkv","avi")) {
-            Icon(Icons.Rounded.PlayCircle, null,
-                tint     = color.copy(0.7f),
-                modifier = Modifier.size(20.dp).padding(start = 4.dp))
-        }
-        // Arrow untuk folder
-        if (file.isDirectory) {
-            Icon(Icons.Rounded.ChevronRight, null,
-                tint     = MaterialTheme.colorScheme.onSurface.copy(0.3f),
-                modifier = Modifier.size(20.dp))
-        }
-    }
-}
-
-// ── FileGridItem ──────────────────────────────────────────────────
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun FileGridItem(file: File, onClick: () -> Unit, onLongClick: () -> Unit) {
-    val ext = file.extension.lowercase()
-    val (icon, color) = getFileIconColor(file)
-    val isImage = ext in listOf("jpg","jpeg","png","gif","webp","bmp")
-
-    Card(
-        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
-        shape    = RoundedCornerShape(12.dp)
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(Modifier.fillMaxWidth().height(80.dp)) {
-                if (isImage) {
-                    AsyncImage(
-                        model  = file,
-                        contentDescription = null,
-                        modifier= Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Box(
-                        Modifier.fillMaxSize().background(color.copy(0.1f)),
-                        Alignment.Center
-                    ) {
-                        Icon(icon, null, tint = color, modifier = Modifier.size(32.dp))
-                    }
-                }
-                // Overlay badge
-                if (ext in listOf("mp3","wav","ogg","m4a","mp4","mkv")) {
-                    Icon(Icons.Rounded.PlayCircle, null,
-                        tint     = Color.White.copy(0.9f),
-                        modifier = Modifier.size(24.dp).align(Alignment.Center))
-                }
-            }
-            Text(
-                file.name, fontSize = 10.sp,
-                maxLines = 2, overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier  = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
-            )
-        }
-    }
-}
-
-// ── getFileIconColor ──────────────────────────────────────────────
-
-@Composable
-fun getFileIconColor(file: File): Pair<ImageVector, Color> {
+fun getFileIconColor(file: FileEntry): Pair<ImageVector, Color> {
     if (file.isDirectory) return Icons.Rounded.Folder to Color(0xFFFFD54F)
     return when (file.extension.lowercase()) {
-        "kt","kts"    -> Icons.Rounded.Code          to Color(0xFF7C4DFF)
-        "java"        -> Icons.Rounded.Code          to Color(0xFFFF6D00)
-        "py"          -> Icons.Rounded.Code          to Color(0xFF00BCD4)
-        "html","htm"  -> Icons.Rounded.Code          to Color(0xFFE64A19)
-        "css","scss"  -> Icons.Rounded.Palette       to Color(0xFF1565C0)
-        "js","ts"     -> Icons.Rounded.Code          to Color(0xFFF9A825)
-        "php"         -> Icons.Rounded.Code          to Color(0xFF6A1B9A)
-        "json"        -> Icons.Rounded.Code          to Color(0xFF558B2F)
-        "xml"         -> Icons.Rounded.Code          to Color(0xFF00897B)
-        "md"          -> Icons.Rounded.Description   to Color(0xFF6D4C41)
-        "txt"         -> Icons.Rounded.Description   to Color(0xFF607D8B)
-        "pdf"         -> Icons.Rounded.Description   to Color(0xFFD32F2F)
-        "zip","rar","7z","gz" -> Icons.Rounded.Folder to Color(0xFF795548)
-        "jpg","jpeg","png","gif","webp","bmp" -> Icons.Rounded.Image to Color(0xFF00ACC1)
-        "mp3","wav","ogg","m4a","aac","flac" -> Icons.Rounded.MusicNote to Color(0xFF7B1FA2)
-        "mp4","mkv","avi","mov","webm","3gp" -> Icons.Rounded.VideoLibrary to Color(0xFFC62828)
-        "apk"         -> Icons.Rounded.PhoneAndroid  to Color(0xFF4CAF50)
-        else          -> Icons.Rounded.Description   to Color(0xFF90A4AE)
+        "kt","java","py","js","html","css" -> Icons.Rounded.Code to Color(0xFF2196F3)
+        "jpg","png","jpeg" -> Icons.Rounded.Image to Color(0xFFE91E63)
+        "mp3","wav" -> Icons.Rounded.MusicNote to Color(0xFF9C27B0)
+        "mp4","mkv" -> Icons.Rounded.VideoLibrary to Color(0xFFF44336)
+        else -> Icons.Rounded.Description to Color(0xFF90A4AE)
     }
 }
-
-// ── formatFileSize ────────────────────────────────────────────────
 
 fun formatFileSize(bytes: Long): String = when {
-    bytes < 1_024L         -> "$bytes B"
-    bytes < 1_048_576L     -> "%.1f KB".format(bytes / 1_024.0)
-    bytes < 1_073_741_824L -> "%.1f MB".format(bytes / 1_048_576.0)
-    else                   -> "%.2f GB".format(bytes / 1_073_741_824.0)
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes/1024} KB"
+    else -> "${bytes/(1024*1024)} MB"
 }
 
-// ── MediaPlayerDialog ─────────────────────────────────────────────
-
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun MediaPlayerDialog(file: File, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val ext     = file.extension.lowercase()
-    val isVideo = ext in listOf("mp4","mkv","avi","mov","webm","3gp")
-    val isAudio = ext in listOf("mp3","wav","ogg","m4a","aac","flac")
-
-    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
-    var isPlaying   by remember { mutableStateOf(false) }
-    var progress    by remember { mutableStateOf(0f) }
-    var duration    by remember { mutableStateOf(0) }
-    var currentMs   by remember { mutableStateOf(0) }
-
-    LaunchedEffect(file) {
-        if (isAudio) {
-            try {
-                val mp = MediaPlayer().apply {
-                    setDataSource(file.absolutePath)
-                    prepare()
-                    start()
-                }
-                mediaPlayer = mp
-                duration    = mp.duration
-                isPlaying   = true
-                // Update progress
-                while (mp.isPlaying) {
-                    currentMs = mp.currentPosition
-                    progress  = if (duration > 0) mp.currentPosition.toFloat() / duration else 0f
-                    kotlinx.coroutines.delay(500)
-                }
-            } catch (_: Exception) {}
+fun FileListItem(
+    file: FileEntry, 
+    onClick: () -> Unit, 
+    onLongClick: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val (icon, color) = getFileIconColor(file)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(vertical = 8.dp, horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(40.dp).background(color.copy(0.1f), RoundedCornerShape(8.dp)), Alignment.Center) { Icon(icon, null, tint=color) }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(file.name, fontSize=14.sp, fontWeight=FontWeight.Medium, maxLines=1, overflow=TextOverflow.Ellipsis)
+            Text(if (file.isDirectory) "Folder" else formatFileSize(file.size), fontSize=11.sp, color=Color.Gray)
+        }
+        Row {
+            IconButton(onClick = onRename, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Rounded.Edit, "Edit", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary.copy(0.7f))
+            }
+            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Rounded.Delete, "Hapus", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error.copy(0.7f))
+            }
+            if (file.isDirectory) {
+                Icon(Icons.Rounded.ChevronRight, null, tint=Color.Gray, modifier = Modifier.align(Alignment.CenterVertically))
+            }
         }
     }
+}
 
-    DisposableEffect(Unit) {
-        onDispose { mediaPlayer?.release() }
-    }
-
-    Dialog(
-        onDismissRequest = { mediaPlayer?.release(); onDismiss() },
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun FileGridItem(
+    file: FileEntry, 
+    onClick: () -> Unit, 
+    onLongClick: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val (icon, color) = getFileIconColor(file)
+    Card(
+        Modifier.combinedClickable(onClick=onClick, onLongClick=onLongClick),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(0.3f))
     ) {
-        Surface(
-            modifier       = Modifier.fillMaxWidth(0.92f),
-            shape          = RoundedCornerShape(24.dp),
-            tonalElevation = 8.dp
-        ) {
-            Column(
-                modifier            = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Header
-                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(file.name, fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(formatFileSize(file.length()), fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurface.copy(0.5f))
-                    }
-                    IconButton(onClick = { mediaPlayer?.release(); onDismiss() }) {
-                        Icon(Icons.Rounded.Close, null)
-                    }
+        Box(Modifier.padding(8.dp)) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                Icon(icon, null, Modifier.size(42.dp), tint=color)
+                Spacer(Modifier.height(4.dp))
+                Text(file.name, fontSize=11.sp, maxLines=1, overflow=TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+            }
+            Row(Modifier.align(Alignment.TopEnd)) {
+                Box(Modifier.size(24.dp).clickable { onRename() }, Alignment.Center) {
+                    Icon(Icons.Rounded.Edit, null, Modifier.size(14.dp), MaterialTheme.colorScheme.primary)
                 }
-
-                // Art / visual
-                Box(
-                    modifier = Modifier
-                        .size(160.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(
-                            if (isAudio) Color(0xFF7B1FA2).copy(0.1f)
-                            else Color(0xFFC62828).copy(0.1f)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        if (isAudio) Icons.Rounded.MusicNote else Icons.Rounded.VideoLibrary,
-                        null,
-                        tint     = if (isAudio) Color(0xFF7B1FA2) else Color(0xFFC62828),
-                        modifier = Modifier.size(64.dp)
-                    )
-                }
-
-                if (isAudio) {
-                    // Progress bar
-                    Column(Modifier.fillMaxWidth()) {
-                        Slider(
-                            value         = progress,
-                            onValueChange = { v ->
-                                progress = v
-                                mediaPlayer?.seekTo((v * duration).toInt())
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                            Text(formatMs(currentMs), fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(0.5f))
-                            Text(formatMs(duration), fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(0.5f))
-                        }
-                    }
-
-                    // Controls
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment     = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = { mediaPlayer?.seekTo(0); progress = 0f }) {
-                            Icon(Icons.Rounded.SkipPrevious, null, Modifier.size(28.dp))
-                        }
-                        FilledIconButton(
-                            onClick  = {
-                                if (isPlaying) { mediaPlayer?.pause(); isPlaying = false }
-                                else { mediaPlayer?.start(); isPlaying = true }
-                            },
-                            modifier = Modifier.size(56.dp)
-                        ) {
-                            Icon(
-                                if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                null, Modifier.size(28.dp)
-                            )
-                        }
-                        IconButton(onClick = {
-                            mediaPlayer?.seekTo((mediaPlayer?.duration ?: 0))
-                        }) {
-                            Icon(Icons.Rounded.SkipNext, null, Modifier.size(28.dp))
-                        }
-                    }
-                }
-
-                if (isVideo) {
-                    Text("Buka di media player untuk video",
-                        fontSize = 12.sp,
-                        color    = MaterialTheme.colorScheme.onSurface.copy(0.5f))
-                    Button(onClick = {
-                        try {
-                            context.startActivity(
-                                Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(Uri.fromFile(file), "video/*")
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                }
-                            )
-                        } catch (_: Exception) {}
-                        onDismiss()
-                    }) { Text("Buka Media Player") }
+                Box(Modifier.size(24.dp).clickable { onDelete() }, Alignment.Center) {
+                    Icon(Icons.Rounded.Delete, null, Modifier.size(14.dp), MaterialTheme.colorScheme.error)
                 }
             }
         }
     }
 }
 
-private fun formatMs(ms: Int): String {
-    val s = ms / 1000
-    return "%d:%02d".format(s / 60, s % 60)
-}
-
-// ── InsertCodeDialog ──────────────────────────────────────────────
-
 @Composable
-fun InsertCodeDialog(
-    file     : File,
-    mode     : InsertMode,
-    onInsert : (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val path = file.absolutePath
-    val suggestions = when (mode) {
-        InsertMode.IMAGE -> listOf(
-            "<img src=\"$path\" alt=\"${file.name}\" />" to "HTML img",
-            "![${file.nameWithoutExtension}]($path)" to "Markdown",
-            "background-image: url('$path');" to "CSS background",
-            "Uri.parse(\"$path\")" to "Android Uri"
-        )
-        InsertMode.AUDIO -> listOf(
-            "<audio src=\"$path\" controls></audio>" to "HTML audio",
-            "MediaPlayer.create(this, Uri.parse(\"$path\"))" to "Android MediaPlayer",
-            "\"audio\": \"$path\"" to "JSON"
-        )
-        InsertMode.VIDEO -> listOf(
-            "<video src=\"$path\" controls></video>" to "HTML video",
-            "Uri.parse(\"$path\")" to "Android Uri",
-            "\"video\": \"$path\"" to "JSON"
-        )
+fun MediaPlayerDialog(file: FileEntry, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var isPlaying by remember { mutableStateOf(false) }
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    
+    DisposableEffect(Unit) {
+        val mp = MediaPlayer().apply {
+            setDataSource(context, file.uri)
+            prepare()
+            start()
+            setOnCompletionListener { isPlaying = false }
+        }
+        mediaPlayer = mp
+        isPlaying = true
+        onDispose { 
+            mp.stop()
+            mp.release() 
+        }
     }
 
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp) {
+            Column(Modifier.padding(24.dp).width(280.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Rounded.MusicNote, null, Modifier.size(64.dp), MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(16.dp))
+                Text(file.name, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("Memutar Audio", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(24.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    FilledIconButton(onClick = { if (isPlaying) mediaPlayer?.pause() else mediaPlayer?.start(); isPlaying = !isPlaying }, modifier = Modifier.size(56.dp)) {
+                        Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null)
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Tutup") }
+            }
+        }
+    }
+}
+
+@Composable
+fun VideoPlayerDialog(file: FileEntry, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(file.uri))
+            prepare()
+            playWhenReady = true
+        }
+    }
+    DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            AndroidView(factory = { ctx -> PlayerView(ctx).apply { player = exoPlayer; useController = true } }, modifier = Modifier.fillMaxSize())
+            IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).background(Color.Black.copy(0.4f), RoundedCornerShape(50))) {
+                Icon(Icons.Rounded.Close, null, tint = Color.White)
+            }
+            Text(file.name, color = Color.White, fontSize = 12.sp, modifier = Modifier.align(Alignment.TopStart).padding(16.dp).background(Color.Black.copy(0.4f), RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 4.dp))
+        }
+    }
+}
+
+@Composable
+fun InsertCodeDialog(file: FileEntry, mode: InsertMode, onInsert: (String) -> Unit, onDismiss: () -> Unit) {
+    val path = file.uri.toString()
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Code, null,
-                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Sisipkan ke Editor")
-            }
-        },
+        title = { Text("Sisipkan Link") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("File: ${file.name}", fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(0.6f))
-                suggestions.forEach { (code, label) ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable { onInsert(code) },
-                        shape    = RoundedCornerShape(10.dp),
-                        colors   = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.height(4.dp))
-                            Text(code, fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                maxLines   = 2, overflow = TextOverflow.Ellipsis)
+                val options = when (mode) {
+                    InsertMode.IMAGE -> listOf(
+                        "HTML" to "<img src='$path' alt='${file.name}' style='max-width:100%'>",
+                        "Markdown" to "![${file.name}]($path)"
+                    )
+                    InsertMode.AUDIO -> listOf(
+                        "HTML" to "<audio controls src='$path'>Browser tidak mendukung audio.</audio>",
+                        "Markdown" to "[🎵 ${file.name}]($path)"
+                    )
+                    InsertMode.VIDEO -> listOf(
+                        "HTML" to "<video controls src='$path' style='max-width:100%'>Browser tidak mendukung video.</video>",
+                        "Markdown" to "[🎥 ${file.name}]($path)"
+                    )
+                }
+                
+                options.forEach { (label, code) ->
+                    Column {
+                        Text(label, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                        Surface(
+                            onClick = { onInsert(code) },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(code, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(12.dp))
                         }
                     }
                 }
