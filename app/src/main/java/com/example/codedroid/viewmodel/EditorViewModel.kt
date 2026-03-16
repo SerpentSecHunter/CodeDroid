@@ -63,7 +63,10 @@ class EditorViewModel : ViewModel() {
             currentUri.value = uri
             
             // Dapatkan nama file dari DocumentFile atau Uri
-            val name = DocumentFile.fromSingleUri(context, uri)?.name ?: "Unknown"
+            val name = DocumentFile.fromSingleUri(context, uri)?.name 
+                ?: uri.path?.substringAfterLast('/') 
+                ?: "Unknown"
+            
             fileName.value   = name
             language.value   = SyntaxHighlighter.detectLanguage(name)
             isModified.value = false

@@ -7,10 +7,23 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.*
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import android.os.Build
+import android.os.StatFs
+import android.os.SystemClock
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import androidx.core.content.edit
 
+@Suppress("SpellCheckingInspection", "SdCardPath")
 class TerminalManager(private val context: Context) {
+
+    companion object { private const val DOLLAR = '$' }
 
     private val _output = MutableSharedFlow<String>(extraBufferCapacity = 2000)
     val output = _output.asSharedFlow()
@@ -29,13 +42,21 @@ class TerminalManager(private val context: Context) {
         "LANG" to "en_US.UTF-8"
     )
 
+    fun getShortPath(): String {
+        val home = env["HOME"] ?: ""
+        return if (currentDir == home) "~"
+        else if (currentDir.startsWith(home)) currentDir.replace(home, "~")
+        else currentDir
+    }
+
     private val installedPkgs: MutableSet<String> by lazy {
         context.getSharedPreferences("cd_pkgs", Context.MODE_PRIVATE)
             .getStringSet("list", mutableSetOf())!!.toMutableSet()
     }
 
-    private fun savePkgs() = context.getSharedPreferences("cd_pkgs", Context.MODE_PRIVATE)
-        .edit().putStringSet("list", installedPkgs).apply()
+    private fun savePkgs() = context.getSharedPreferences("cd_pkgs", Context.MODE_PRIVATE).edit {
+        putStringSet("list", installedPkgs)
+    }
 
     private var pyReady = false
 
@@ -45,30 +66,30 @@ class TerminalManager(private val context: Context) {
             if (!Python.isStarted()) Python.start(AndroidPlatform(context))
             pyReady = true
             true
-        } catch (e: Exception) {
-            emitLine("❌ Python init error: ${e.message}")
+        } catch (ex: Exception) {
+            emitLine("❌ Python init error: ${ex.message}")
             false
         }
     }
 
-    // Fungsi emit utama — thread-safe
+    // Main emit function - thread-safe
     private fun emitLine(text: String) {
         scope.launch { _output.emit(text) }
     }
 
     fun startSession() {
         scope.launch {
-            delay(80)
-            emitLine("╔══════════════════════════════════════════╗")
-            emitLine("║   CodeDroid Terminal v2.3.1              ║")
-            emitLine("║   Termux-style • Python 3.11 built-in    ║")
-            emitLine("╚══════════════════════════════════════════╝")
-            emitLine("📂 Home: ${env["HOME"]}")
-            emitLine("💡 Ketik 'help' untuk semua perintah")
+            delay(150)
+            emitLine("Welcome to CodeDroid v2.2.0")
+            emitLine("System: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            emitLine("Shell: codedroid-sh (Basic Terminal Emulation)")
             emitLine("")
-            launch {
-                if (initPython()) emitLine("🐍 Python 3.11 ready (Chaquopy)")
-            }
+            emitLine("[36m* Python 3.11 environment is ready.[0m")
+            emitLine("[36m* BusyBox-style utilities available.[0m")
+            emitLine("[36m* Package Manager (pkg) integrated.[0m")
+            emitLine("")
+            emitLine("Type [32m'help'[0m to see available commands.")
+            emitLine("")
         }
     }
 
@@ -76,12 +97,13 @@ class TerminalManager(private val context: Context) {
         val cmd = raw.trim()
         if (cmd.isBlank()) return
         commandHistory.add(0, cmd)
-        if (commandHistory.size > 200) commandHistory.removeLast()
+        if (commandHistory.size > 200) commandHistory.removeAt(commandHistory.lastIndex)
 
         scope.launch {
-            emitLine("$ $cmd")
+            emitLine("${getShortPath()} $ $cmd")
             val tok = cmd.split(Regex("\\s+"))
             when {
+
                 cmd.contains(">>") && cmd.startsWith("echo") -> doRedirect(cmd)
                 cmd.contains(">") && cmd.startsWith("echo")  -> doRedirect(cmd)
                 cmd.contains("|") -> doPipe(cmd)
@@ -116,13 +138,13 @@ class TerminalManager(private val context: Context) {
                 tok[0] == "file"     -> doFile(cmd)
                 tok[0] == "zip"      -> doZip(cmd)
                 tok[0] == "unzip"    -> doUnzip(cmd)
-                tok[0] == "tar"      -> doTar(cmd)
+                tok[0] == "tar"      -> doTar()
                 tok[0] == "nano" || tok[0] == "vi" || tok[0] == "vim" -> doNano(cmd)
 
                 tok[0] == "whoami"   -> emitLine("codedroid")
                 tok[0] == "id"       -> emitLine("uid=1000(codedroid) gid=1000 groups=1000")
-                tok[0] == "hostname" -> emitLine(android.os.Build.MODEL)
-                tok[0] == "date"     -> emitLine(Date().toString())
+                tok[0] == "hostname" -> emitLine(Build.MODEL)
+                tok[0] == "date"     -> emitLine(LocalDateTime.now().toString())
                 tok[0] == "uname"    -> doUname(cmd)
                 tok[0] == "uptime"   -> doUptime()
                 tok[0] == "free"     -> doFree()
@@ -131,12 +153,12 @@ class TerminalManager(private val context: Context) {
                 tok[0] == "export"   -> doExport(cmd)
                 tok[0] == "unset"    -> env.remove(tok.getOrNull(1))
                 tok[0] == "which"    -> doWhich(cmd)
-                tok[0] == "alias"    -> emitLine("alias: tidak didukung di sesi ini")
+                tok[0] == "alias"    -> emitLine("alias: not supported in this session")
                 tok[0] == "history"  -> doHistory()
                 tok[0] == "sleep"    -> doSleep(cmd)
                 tok[0] == "clear"    -> emitLine("\u0000CLEAR")
                 tok[0] == "help"     -> showHelp()
-                tok[0] == "exit" || tok[0] == "logout" -> emitLine("Gunakan tombol back untuk keluar")
+                tok[0] == "exit" || tok[0] == "logout" -> emitLine("\u0000EXIT")
                 tok[0] == "true"     -> { /* exit 0 */ }
                 tok[0] == "false"    -> emitLine("exit code: 1")
 
@@ -147,11 +169,11 @@ class TerminalManager(private val context: Context) {
                 cmd == "ip addr" || cmd == "ip a" -> doIfconfig()
                 tok[0] == "nslookup" -> doNslookup(cmd)
                 tok[0] == "ssh"      -> emitLine("ssh: Install Termux → pkg install openssh")
-                tok[0] == "netstat"  -> emitLine("Gunakan 'ifconfig' untuk info jaringan")
+                tok[0] == "netstat"  -> emitLine("Use 'ifconfig' for network info")
 
                 tok[0] == "pkg"      -> doPkg(cmd)
-                tok[0] == "apt" || tok[0] == "apt-get" -> emitLine("apt tidak tersedia. Gunakan: pkg install <nama>")
-                tok[0] == "brew"     -> emitLine("Homebrew tidak tersedia di Android.")
+                tok[0] == "apt" || tok[0] == "apt-get" -> emitLine("apt not available. Use: pkg install <name>")
+                tok[0] == "brew"     -> emitLine("Homebrew not available on Android.")
                 tok[0] == "sudo"     -> emitLine("sudo: permission denied")
                 tok[0] == "su"       -> emitLine("su: authentication failure")
 
@@ -164,10 +186,10 @@ class TerminalManager(private val context: Context) {
                 tok[0] == "git"      -> doGit(cmd)
                 tok[0] == "php"      -> doPhp(cmd)
 
-                tok[0] == "sed"      -> emitLine("sed: gunakan Python untuk text processing.")
-                tok[0] == "awk"      -> emitLine("awk: gunakan Python untuk text processing.")
-                tok[0] == "tr"       -> emitLine("tr: gunakan python3 -c untuk text transform.")
-                tok[0].startsWith("#") -> { /* komentar */ }
+                tok[0] == "sed"      -> emitLine("sed: use Python for text processing.")
+                tok[0] == "awk"      -> emitLine("awk: use Python for text processing.")
+                tok[0] == "tr"       -> emitLine("tr: use 'python3 -c' for text transform.")
+                tok[0].startsWith("#") -> { /* comment */ }
                 else -> runSystem(cmd)
             }
         }
@@ -218,7 +240,8 @@ class TerminalManager(private val context: Context) {
             files.forEach { f ->
                 val p = "${if (f.isDirectory) "d" else "-"}${if (f.canRead()) "r" else "-"}${if (f.canWrite()) "w" else "-"}${if (f.canExecute()) "x" else "-"}------"
                 val s = if (human) fmtSize(f.length()) else f.length().toString()
-                val d = SimpleDateFormat("MMM dd HH:mm", Locale.getDefault()).format(Date(f.lastModified()))
+                val d = LocalDateTime.ofInstant(Instant.ofEpochMilli(f.lastModified()), ZoneId.systemDefault())
+                    .format(DateTimeFormatter.ofPattern("MMM dd HH:mm", Locale.getDefault()))
                 emitLine("$p  1 codedroid codedroid  ${s.padStart(7)}  $d  ${if (f.isDirectory) "${f.name}/" else f.name}")
             }
         } else {
@@ -312,7 +335,7 @@ class TerminalManager(private val context: Context) {
             when {
                 !f.exists()   -> emitLine("cat: $name: No such file or directory")
                 f.isDirectory -> emitLine("cat: $name: Is a directory")
-                f.length() > 2_000_000 -> emitLine("cat: $name: File terlalu besar (>2MB)")
+                f.length() > 2_000_000 -> emitLine("cat: $name: File too large (>2MB)")
                 else -> f.readLines().forEachIndexed { i, line ->
                     if (showLn) emitLine("${(i + 1).toString().padStart(6)}\t$line") else emitLine(line)
                 }
@@ -324,8 +347,8 @@ class TerminalManager(private val context: Context) {
         val noNl = cmd.startsWith("echo -n ")
         val text = (if (noNl) cmd.removePrefix("echo -n") else cmd.removePrefix("echo")).trim()
             .replace("\\n", "\n").replace("\\t", "\t")
-            .let { t -> env.entries.fold(t) { acc, (k, v) -> acc.replace("\$$k", v) } }
-            .replace("\$PWD", currentDir).replace("\$HOME", env["HOME"] ?: "")
+            .let { t -> env.entries.fold(t) { acc, (k, v) -> acc.replace("${DOLLAR}$k", v) } }
+            .replace("${DOLLAR}PWD", currentDir).replace("${DOLLAR}HOME", env["HOME"] ?: "")
         text.lines().forEach { emitLine(it) }
     }
 
@@ -481,7 +504,7 @@ class TerminalManager(private val context: Context) {
 
     private fun doDf() {
         try {
-            val st    = android.os.StatFs(currentDir)
+            val st    = StatFs(currentDir)
             val total = st.totalBytes; val free = st.freeBytes; val used = total - free
             emitLine("Filesystem      Size     Used    Avail   Use%")
             emitLine("/data/codedroid ${fmtSize(total).padEnd(8)} ${fmtSize(used).padEnd(7)} ${fmtSize(free).padEnd(7)} ${used * 100 / total}%")
@@ -492,11 +515,12 @@ class TerminalManager(private val context: Context) {
         val name = cmd.removePrefix("stat").trim()
         val f    = File(if (name.startsWith("/")) name else "$currentDir/$name")
         if (!f.exists()) { emitLine("stat: cannot statx '$name': No such file or directory"); return }
-        val sdf  = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val fmt  = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        val mtime = LocalDateTime.ofInstant(Instant.ofEpochMilli(f.lastModified()), ZoneId.systemDefault())
         emitLine("  File: ${f.absolutePath}")
         emitLine("  Size: ${f.length()}\t${if (f.isDirectory) "directory" else "regular file"}")
         emitLine("Access: (${if (f.canRead()) "r" else "-"}${if (f.canWrite()) "w" else "-"}${if (f.canExecute()) "x" else "-"})")
-        emitLine("Modify: ${sdf.format(Date(f.lastModified()))}")
+        emitLine("Modify: ${mtime.format(fmt)}")
     }
 
     private fun doFile(cmd: String) {
@@ -523,10 +547,10 @@ class TerminalManager(private val context: Context) {
         val zipFile = File(if (parts[0].startsWith("/")) parts[0] else "$currentDir/${parts[0]}")
         val files   = parts.drop(1).map { File(if (it.startsWith("/")) it else "$currentDir/$it") }
         try {
-            java.util.zip.ZipOutputStream(zipFile.outputStream()).use { zos ->
+            ZipOutputStream(zipFile.outputStream()).use { zos ->
                 files.forEach { f ->
                     if (!f.exists()) { emitLine("zip: $f: No such file"); return@forEach }
-                    zos.putNextEntry(java.util.zip.ZipEntry(f.name))
+                    zos.putNextEntry(ZipEntry(f.name))
                     f.inputStream().use { it.copyTo(zos) }
                     zos.closeEntry()
                     emitLine("  adding: ${f.name}")
@@ -543,7 +567,7 @@ class TerminalManager(private val context: Context) {
         val zipFile = File(if (zipName.startsWith("/")) zipName else "$currentDir/$zipName")
         if (!zipFile.exists()) { emitLine("unzip: cannot find '$zipName'"); return }
         try {
-            java.util.zip.ZipInputStream(zipFile.inputStream()).use { zis ->
+            ZipInputStream(zipFile.inputStream()).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
                     val out = File(currentDir, entry.name)
@@ -556,14 +580,14 @@ class TerminalManager(private val context: Context) {
         } catch (e: Exception) { emitLine("unzip: ${e.message}") }
     }
 
-    private fun doTar(cmd: String) {
-        emitLine("tar: gunakan 'zip'/'unzip' untuk archiving")
+    private fun doTar() {
+        emitLine("tar: use 'zip'/'unzip' for archiving")
     }
 
     private fun doNano(cmd: String) {
         val name = cmd.split(Regex("\\s+")).getOrNull(1) ?: ""
-        emitLine("nano/vim: tidak tersedia sebagai TUI.")
-        emitLine("💡 Gunakan File Manager → buka file → edit di Editor")
+        emitLine("nano/vim: not available as TUI.")
+        emitLine("💡 Use File Manager -> open file -> edit in Editor")
         if (name.isNotBlank()) emitLine("   File: $currentDir/$name")
     }
 
@@ -571,18 +595,19 @@ class TerminalManager(private val context: Context) {
         val a = "-a" in cmd
         val r = buildString {
             if ("-s" in cmd || a) append("Linux ")
-            if ("-n" in cmd || a) append("${android.os.Build.MODEL} ")
-            if ("-r" in cmd || a) append("${android.os.Build.VERSION.RELEASE} ")
-            if ("-m" in cmd || a) append(android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "aarch64")
+            if ("-n" in cmd || a) append("${Build.MODEL} ")
+            if ("-r" in cmd || a) append("${Build.VERSION.RELEASE} ")
+            if ("-m" in cmd || a) append(Build.SUPPORTED_ABIS.firstOrNull() ?: "aarch64")
             if (isEmpty()) append("Linux")
         }
         emitLine(r.trim())
     }
 
     private fun doUptime() {
-        val ms = android.os.SystemClock.elapsedRealtime()
+        val ms = SystemClock.elapsedRealtime()
         val h  = ms / 3600000; val m = (ms % 3600000) / 60000
-        emitLine(" ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}  up ${h}h ${m}m,  1 user,  load average: 0.00")
+        val now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+        emitLine(" $now  up ${h}h ${m}m,  1 user,  load average: 0.00")
     }
 
     private fun doFree() {
@@ -671,7 +696,7 @@ class TerminalManager(private val context: Context) {
                 if (!headOnly) {
                     val body = runCatching { conn.inputStream.bufferedReader().readText() }.getOrDefault("")
                     body.lines().take(200).forEach { emitLine(it) }
-                    if (body.lines().size > 200) emitLine("... (terpotong)")
+                    if (body.lines().size > 200) emitLine("... (truncated)")
                 }
                 conn.disconnect()
             } catch (e: Exception) { emitLine("curl: ${e.message}") }
@@ -685,7 +710,8 @@ class TerminalManager(private val context: Context) {
         val url     = parts.lastOrNull { it.startsWith("http") }
             ?: run { emitLine("wget: missing URL"); return }
         val name    = outName ?: url.substringAfterLast("/").ifBlank { "index.html" }
-        emitLine("--${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}--  $url")
+        val ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+        emitLine("--$ts--  $url")
         emitLine("Saving to: '$name'")
         scope.launch {
             try {
@@ -771,7 +797,7 @@ class TerminalManager(private val context: Context) {
             emitLine("Reading package lists...")
             when {
                 builtinPkgs.contains(pkg.lowercase()) -> {
-                    emitLine("${pkg} is already the newest version (built-in)")
+                    emitLine("$pkg is already the newest version (built-in)")
                     installedPkgs.add(pkg.lowercase()); savePkgs()
                 }
                 pkgDb.containsKey(pkg.lowercase()) -> {
@@ -797,7 +823,7 @@ class TerminalManager(private val context: Context) {
     private fun doPkgList() {
         val all = (installedPkgs + builtinPkgs).sorted()
         emitLine("Installed packages (${all.size}):")
-        all.forEach { pkg -> emitLine("  ${"$pkg".padEnd(16)} ${if (builtinPkgs.contains(pkg)) "[built-in]" else "[installed]"}") }
+        all.forEach { pkg -> emitLine("  ${pkg.padEnd(16)} ${if (builtinPkgs.contains(pkg)) "[built-in]" else "[installed]"}") }
     }
 
     private fun doPkgSearch(cmd: String) {
@@ -805,7 +831,7 @@ class TerminalManager(private val context: Context) {
         if (q.isBlank()) { emitLine("Usage: pkg search <query>"); return }
         val res = pkgDb.filter { (k, v) -> k.contains(q, true) || v.contains(q, true) }
         if (res.isEmpty()) { emitLine("No packages found for '$q'"); return }
-        res.forEach { (k, v) -> emitLine("${"$k".padEnd(16)} $v") }
+        res.forEach { (k, v) -> emitLine("${k.padEnd(16)} $v") }
     }
 
     // ── Python via Chaquopy ────────────────────────────────────────
@@ -814,7 +840,7 @@ class TerminalManager(private val context: Context) {
         if (!initPython()) return
         val arg = cmd.split(Regex("\\s+"), limit = 2).getOrNull(1)?.trim() ?: ""
         when {
-            arg.isBlank() -> emitLine("Python 3.11 ready. Gunakan: python3 -c '<code>'  atau  python3 <file.py>")
+            arg.isBlank() -> emitLine("Python 3.11 ready. Use: python3 -c '<code>'  or  python3 <file.py>")
             arg.startsWith("-c ") -> {
                 val code = arg.removePrefix("-c").trim().trim('"').trim('\'')
                 runPythonCode(code)
@@ -824,7 +850,7 @@ class TerminalManager(private val context: Context) {
                 if (!f.exists()) { emitLine("python3: can't open file '$arg': No such file or directory"); return }
                 runPythonCode(f.readText(), f.parent ?: currentDir)
             }
-            else -> emitLine("Usage: python3 <script.py>  atau  python3 -c '<code>'")
+            else -> emitLine("Usage: python3 <script.py>  or  python3 -c '<code>'")
         }
     }
 
@@ -940,11 +966,11 @@ except Exception as e:
             val m = Regex("No module named '(.+?)'").find(err)?.groupValues?.get(1) ?: "module"
             "pip3 install $m"
         }
-        "SyntaxError" in err       -> "Cek syntax: kurung, titik dua, tanda kutip"
-        "IndentationError" in err  -> "Gunakan 4 spasi atau tab konsisten"
-        "NameError" in err         -> "Variabel belum didefinisikan"
-        "TypeError" in err         -> "Tipe data tidak sesuai"
-        "FileNotFoundError" in err -> "File tidak ditemukan"
+        "SyntaxError" in err       -> "Check syntax: brackets, colons, quotes"
+        "IndentationError" in err  -> "Use 4 spaces or consistent tabs"
+        "NameError" in err         -> "Variable not defined"
+        "TypeError" in err         -> "Data type mismatch"
+        "FileNotFoundError" in err -> "File not found"
         else -> null
     }
 
@@ -987,7 +1013,7 @@ except Exception as e:
             val text = left.removePrefix("echo").trim()
             if (append) out.appendText(text + "\n") else out.writeText(text + "\n")
         } else {
-            emitLine("💡 Redirect kompleks: gunakan Python")
+            emitLine("💡 Complex redirect: use Python")
         }
     }
 
@@ -1000,12 +1026,12 @@ except Exception as e:
     private fun runSystem(cmd: String) {
         try {
             val envArr = (env + mapOf("PWD" to currentDir)).map { (k, v) -> "$k=$v" }.toTypedArray()
-            val proc   = Runtime.getRuntime().exec(arrayOf("/bin/sh", "-c", cmd), envArr, File(currentDir))
+            val proc   = Runtime.getRuntime().exec(arrayOf("/system/bin/sh", "-c", cmd), envArr, File(currentDir))
             scope.launch { proc.inputStream.bufferedReader().forEachLine { emitLine(it) } }
             scope.launch { proc.errorStream.bufferedReader().forEachLine { if (it.isNotBlank()) emitLine(it) } }
             val code = proc.waitFor()
             if (code != 0) sysHint(cmd.split(Regex("\\s+")).first())?.let { emitLine("💡 $it") }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             val bin = cmd.split(Regex("\\s+")).first()
             emitLine("$bin: command not found")
             sysHint(bin)?.let { emitLine("💡 $it") }
@@ -1013,9 +1039,9 @@ except Exception as e:
     }
 
     private fun sysHint(bin: String): String? = when (bin) {
-        "apt", "apt-get" -> "Gunakan 'pkg install <nama>'"
-        "sudo", "su"     -> "sudo tidak tersedia (tidak ada root)"
-        "vim", "vi"      -> "Gunakan editor CodeDroid"
+        "apt", "apt-get" -> "Use 'pkg install <name>'"
+        "sudo", "su"     -> "sudo not available (no root)"
+        "vim", "vi"      -> "Use CodeDroid editor"
         else -> null
     }
 
@@ -1024,19 +1050,19 @@ except Exception as e:
             "╔══════════════════════════════════════════════╗",
             "║     CodeDroid Terminal — Command Reference   ║",
             "╠══════════════════════════════════════════════╣",
-            "║  NAVIGASI: pwd cd ls [-la] mkdir touch       ║",
+            "║  NAVIGATION: pwd cd ls [-la] mkdir touch     ║",
             "║  FILE: rm [-rf] cp [-r] mv cat [-n]          ║",
             "║        head tail wc grep find diff stat      ║",
             "║        sort uniq cut du df zip unzip         ║",
             "╠══════════════════════════════════════════════╣",
-            "║  PYTHON (built-in, tanpa Termux):            ║",
+            "║  PYTHON (built-in, no Termux):               ║",
             "║    python3 <file.py>                         ║",
             "║    python3 -c '<code>'                       ║",
             "║    pip3 install/uninstall/list/show/freeze   ║",
             "╠══════════════════════════════════════════════╣",
             "║  PACKAGE: pkg install/remove/list/search     ║",
             "║  NETWORK: ping curl wget ifconfig nslookup   ║",
-            "║  SISTEM:  echo env export which uname free   ║",
+            "║  SYSTEM:  echo env export which uname free   ║",
             "║           uptime ps date whoami history      ║",
             "╚══════════════════════════════════════════════╝"
         ).forEach { emitLine(it) }

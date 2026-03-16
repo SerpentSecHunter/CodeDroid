@@ -68,7 +68,7 @@ suspend fun sendAiMessage(
                     endpoint.extraHeaders.forEach { (k, v) -> b.addHeader(k, v) }
                     request = b.build()
                     val res  = client.newCall(request).execute()
-                    val json = JSONObject(res.body!!.string())
+                    val json = JSONObject(res.body?.string() ?: "{}")
                     if (!res.isSuccessful) throw Exception(
                         json.optJSONObject("error")?.optString("message") ?: "Error ${res.code}")
                     json.getJSONArray("content").getJSONObject(0).getString("text")
@@ -91,7 +91,7 @@ suspend fun sendAiMessage(
                         .addHeader("Content-Type", "application/json")
                         .build()
                     val res  = client.newCall(request).execute()
-                    val json = JSONObject(res.body!!.string())
+                    val json = JSONObject(res.body?.string() ?: "{}")
                     if (!res.isSuccessful) throw Exception(
                         json.optJSONObject("error")?.optString("message") ?: "Error ${res.code}")
                     json.getJSONArray("candidates").getJSONObject(0)
@@ -120,7 +120,7 @@ suspend fun sendAiMessage(
                     endpoint.extraHeaders.forEach { (k, v) -> b.addHeader(k, v) }
                     request = b.build()
                     val res  = client.newCall(request).execute()
-                    val json = JSONObject(res.body!!.string())
+                    val json = JSONObject(res.body?.string() ?: "{}")
                     if (!res.isSuccessful) throw Exception(
                         json.optJSONObject("error")?.optString("message") ?: "Error ${res.code}")
                     json.getJSONArray("choices").getJSONObject(0)

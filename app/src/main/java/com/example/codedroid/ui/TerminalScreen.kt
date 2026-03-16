@@ -1,329 +1,243 @@
 package com.example.codedroid.ui
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.codedroid.terminal.TerminalManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-// Catppuccin Mocha colors
-private val BG       = Color(0xFF1E1E2E)
-private val SURFACE  = Color(0xFF181825)
-private val OVERLAY  = Color(0xFF313244)
-private val TEXT     = Color(0xFFCDD6F4)
-private val SUBTEXT  = Color(0xFF6C7086)
-private val BLUE     = Color(0xFF89B4FA)
-private val GREEN    = Color(0xFFA6E3A1)
-private val RED      = Color(0xFFF38BA8)
-private val YELLOW   = Color(0xFFF9E2AF)
-private val MAUVE    = Color(0xFFCBA6F7)
-private val TEAL     = Color(0xFF94E2D5)
-private val FLAMINGO = Color(0xFFF2CDCD)
+// Precise Termux palette
+private val TERM_BG      = Color(0xFF000000)
+private val TERM_TEXT    = Color(0xFFE0E0E0)
+private val TERM_PROMPT  = Color(0xFF4CAF50)
+private val TERM_CURSOR  = Color(0xFFFFFFFF)
+private val TERM_BAR_BG  = Color(0xFF1A1A1A) 
+private val BORDER_COLOR = Color(0xFF333333)
 
-data class TermLine(val text: String, val color: Color)
+private val COLOR_RED    = Color(0xFFE57373)
+private val COLOR_GREEN  = Color(0xFF81C784)
+private val COLOR_YELLOW = Color(0xFFFFF176)
+private val COLOR_BLUE   = Color(0xFF64B5F6)
+private val COLOR_MAGENTA= Color(0xFFBA68C8)
+private val COLOR_CYAN   = Color(0xFF4DD0E1)
 
 @Composable
-fun TerminalScreen(terminalManager: TerminalManager) {
+fun parseAnsi(text: String): androidx.compose.ui.text.AnnotatedString {
+    return buildAnnotatedString {
+        val parts = text.split("\u001b[")
+        append(parts[0])
+        for (i in 1 until parts.size) {
+            val part = parts[i]
+            val mIndex = part.indexOf('m')
+            if (mIndex != -1) {
+                val code = part.substring(0, mIndex)
+                val content = part.substring(mIndex + 1)
+                val style = when (code) {
+                    "31" -> SpanStyle(color = COLOR_RED)
+                    "32" -> SpanStyle(color = COLOR_GREEN)
+                    "33" -> SpanStyle(color = COLOR_YELLOW)
+                    "34" -> SpanStyle(color = COLOR_BLUE)
+                    "35" -> SpanStyle(color = COLOR_MAGENTA)
+                    "36" -> SpanStyle(color = COLOR_CYAN)
+                    "0"  -> SpanStyle(color = TERM_TEXT)
+                    "1"  -> SpanStyle(fontWeight = FontWeight.Bold)
+                    else -> SpanStyle()
+                }
+                pushStyle(style)
+                append(content)
+                pop()
+            } else append("\u001b[" + part)
+        }
+    }
+}
+
+@Composable
+fun TerminalScreen(terminalManager: TerminalManager, onOpenDrawer: () -> Unit) {
+    val context      = androidx.compose.ui.platform.LocalContext.current
     val scope        = rememberCoroutineScope()
     val listState    = rememberLazyListState()
     val focusReq     = remember { FocusRequester() }
     var input        by remember { mutableStateOf("") }
-    val lines        = remember { mutableStateListOf<TermLine>() }
+    val lines        = remember { mutableStateListOf<String>() }
     val cmdHistory   = remember { mutableStateListOf<String>() }
     var histIdx      by remember { mutableStateOf(-1) }
-    var showShortcuts by remember { mutableStateOf(true) }
+    
+    var ctrlActive   by remember { mutableStateOf(false) }
+    var altActive    by remember { mutableStateOf(false) }
 
-    val shortcuts = listOf(
-        "ls" to "ls", "cd ~" to "cd ~", "pwd" to "pwd",
-        "clear" to "clear", "help" to "help",
-        "python3" to "python3 ", "pip" to "pip install ",
-        "cat" to "cat ", "mkdir" to "mkdir ",
-        "rm" to "rm ", "cp" to "cp ", "mv" to "mv ",
-        "grep" to "grep ", "echo" to "echo ",
-        "history" to "history"
+    val extraKeys = listOf("MENU", "ESC", "CTRL", "ALT", "TAB", "UP", "DOWN", "LEFT", "RIGHT")
+
+    val cursorAlpha by rememberInfiniteTransition(label = "").animateFloat(
+        initialValue = 0.1f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(450, easing = LinearEasing), RepeatMode.Reverse), label = ""
     )
 
     LaunchedEffect(Unit) {
         terminalManager.startSession()
         terminalManager.output.collect { raw ->
-            when {
-                raw == "\u0000CLEAR" -> lines.clear()
-                raw.startsWith("$ ") -> lines.add(TermLine(raw, MAUVE))
-                raw.startsWith("✅") -> lines.add(TermLine(raw, GREEN))
-                raw.startsWith("❌") || raw.lowercase().let {
-                    it.contains("error") || it.contains("failed") || it.contains("exception")
-                } -> lines.add(TermLine(raw, RED))
-                raw.startsWith("⚠️") || raw.lowercase().contains("warning")
-                    -> lines.add(TermLine(raw, YELLOW))
-                raw.startsWith("⬇️") -> lines.add(TermLine(raw, TEAL))
-                raw.startsWith("▶")  -> lines.add(TermLine(raw, BLUE))
-                raw.startsWith("💡") -> lines.add(TermLine(raw, FLAMINGO))
-                raw.startsWith("ℹ️") || raw.startsWith("---") || raw.startsWith("╔") ||
-                raw.startsWith("║") || raw.startsWith("╚")
-                    -> lines.add(TermLine(raw, SUBTEXT))
-                else -> lines.add(TermLine(raw, TEXT))
-            }
-            if (lines.size > 1000) lines.removeAt(0)
-            scope.launch {
-                if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size - 1)
+            when (raw) {
+                "\u0000EXIT" -> { (context as? android.app.Activity)?.finish() }
+                "\u0000CLEAR" -> lines.clear()
+                else -> {
+                    lines.add(raw)
+                    if (lines.size > 1500) lines.removeAt(0)
+                    scope.launch {
+                        delay(50)
+                        if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size - 1)
+                    }
+                }
             }
         }
     }
 
-    Column(Modifier.fillMaxSize().background(BG)) {
-
-        // ── Title bar ─────────────────────────────────────────────
-        Row(
-            modifier = Modifier.fillMaxWidth()
-                .background(SURFACE)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Traffic lights
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(Modifier.size(12.dp).clip(CircleShape).background(RED))
-                Box(Modifier.size(12.dp).clip(CircleShape).background(YELLOW))
-                Box(Modifier.size(12.dp).clip(CircleShape).background(GREEN))
-            }
-            Spacer(Modifier.width(12.dp))
-            Text("bash — CodeDroid Terminal",
-                fontSize   = 13.sp,
-                fontFamily = FontFamily.Monospace,
-                color      = SUBTEXT,
-                modifier   = Modifier.weight(1f))
-            // Toggle shortcut bar
-            IconButton(onClick = { showShortcuts = !showShortcuts },
-                modifier = Modifier.size(30.dp)) {
-                Icon(Icons.Rounded.SpaceBar, null,
-                    tint = if (showShortcuts) GREEN else SUBTEXT,
-                    modifier = Modifier.size(16.dp))
-            }
-            // Clear
-            IconButton(onClick = { lines.clear() },
-                modifier = Modifier.size(30.dp)) {
-                Icon(Icons.Rounded.Clear, null, tint = SUBTEXT,
-                    modifier = Modifier.size(16.dp))
-            }
-        }
-
-        // ── Shortcut bar ──────────────────────────────────────────
-        if (showShortcuts) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(SURFACE.copy(0.7f))
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                shortcuts.forEach { (label, insert) ->
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(OVERLAY)
-                            .pointerInput(Unit) {
-                                detectTapGestures { input += insert }
-                            }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Text(label, fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace, color = MAUVE)
-                    }
-                }
-            }
-        }
-
-        HorizontalDivider(color = OVERLAY, thickness = 0.5.dp)
-
-        // ── Output ────────────────────────────────────────────────
+    // Wrap in Scaffold-like column to handle Insets properly
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(TERM_BG)
+            .statusBarsPadding() // Space for top status bar
+            .pointerInput(Unit) { detectTapGestures { focusReq.requestFocus() } }
+    ) {
+        // 1. Output (Main Content)
         LazyColumn(
-            state    = listState,
+            state = listState,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(1.dp)
+                .padding(horizontal = 10.dp)
         ) {
             items(lines) { line ->
-                // Error: tampilkan hint
-                if (line.color == RED) {
-                    Column(Modifier.padding(vertical = 2.dp)) {
-                        Text(line.text, color = RED, fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace)
-                        val hint = getErrorHint(line.text)
-                        if (hint != null) {
-                            Row(
-                                modifier = Modifier
-                                    .padding(top = 4.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(OVERLAY)
-                                    .padding(8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text("💡", fontSize = 12.sp)
-                                Text(hint, color = FLAMINGO, fontSize = 11.sp,
-                                    lineHeight = 16.sp)
-                            }
+                Text(
+                    text = parseAnsi(line),
+                    color = TERM_TEXT,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 17.sp
+                )
+            }
+        }
+
+        // 2. Input Row
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Text(
+                text = "${terminalManager.getShortPath()} $ ",
+                color = TERM_PROMPT,
+                fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold
+            )
+            Box(modifier = Modifier.weight(1f)) {
+                BasicTextField(
+                    value = input,
+                    onValueChange = { input = it; histIdx = -1 },
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = Color.Transparent),
+                    cursorBrush = SolidColor(Color.Transparent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, autoCorrectEnabled = false),
+                    keyboardActions = KeyboardActions(onDone = {
+                        if (input.isNotBlank()) {
+                            cmdHistory.add(0, input)
+                            terminalManager.sendCommand(input)
+                            input = ""
                         }
-                    }
-                } else {
-                    Text(line.text, color = line.color, fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace, lineHeight = 17.sp)
+                    }),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusReq)
+                )
+                Row {
+                    Text(input, color = TERM_TEXT, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+                    Box(Modifier.padding(top = 2.dp).size(8.dp, 16.dp).background(TERM_CURSOR.copy(alpha = cursorAlpha)))
                 }
             }
         }
 
-        HorizontalDivider(color = OVERLAY, thickness = 0.5.dp)
-
-        // ── Input area ────────────────────────────────────────────
-        Row(
+        // 3. Toolbar (Navbar Extra Keys)
+        // We use inner column to separate toolbar from system navigation bar
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(SURFACE)
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-                .imePadding(),
-            verticalAlignment = Alignment.CenterVertically
+                .background(TERM_BAR_BG)
+                .imePadding() // Pushes up when keyboard is visible
         ) {
-            // Prompt
-            Text(
-                buildAnnotatedString {
-                    withStyle(SpanStyle(color = BLUE, fontWeight = FontWeight.Bold))  { append("user") }
-                    withStyle(SpanStyle(color = SUBTEXT))  { append("@") }
-                    withStyle(SpanStyle(color = GREEN, fontWeight = FontWeight.Bold))  { append("codedroid") }
-                    withStyle(SpanStyle(color = MAUVE, fontWeight = FontWeight.Bold))  { append(" \$ ") }
-                },
-                fontSize   = 12.sp,
-                fontFamily = FontFamily.Monospace
-            )
-
-            // Input field
-            BasicTextField(
-                value         = input,
-                onValueChange = { input = it; histIdx = -1 },
-                textStyle     = TextStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize   = 13.sp,
-                    color      = TEXT
-                ),
-                singleLine    = true,
-                cursorBrush   = SolidColor(MAUVE),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = {
-                    if (input.isNotBlank()) {
-                        cmdHistory.add(0, input)
-                        histIdx = -1
-                        val cmd = input; input = ""
-                        terminalManager.sendCommand(cmd)
-                    }
-                }),
+            // Distinct Top Border for the Toolbar
+            HorizontalDivider(color = BORDER_COLOR, thickness = 1.dp)
+            
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .focusRequester(focusReq)
-                    .padding(vertical = 4.dp)
-            )
-
-            // History navigation
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                IconButton(onClick = {
-                    if (cmdHistory.isNotEmpty() && histIdx < cmdHistory.size - 1) {
-                        histIdx++
-                        input = cmdHistory[histIdx]
-                    }
-                }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Rounded.ArrowUpward, null,
-                        tint = SUBTEXT, modifier = Modifier.size(14.dp))
-                }
-                IconButton(onClick = {
-                    if (histIdx > 0) { histIdx--; input = cmdHistory[histIdx] }
-                    else { histIdx = -1; input = "" }
-                }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Rounded.ArrowDownward, null,
-                        tint = SUBTEXT, modifier = Modifier.size(14.dp))
-                }
-            }
-
-            // Send button
-            IconButton(
-                onClick = {
-                    if (input.isNotBlank()) {
-                        cmdHistory.add(0, input)
-                        histIdx = -1
-                        val cmd = input; input = ""
-                        terminalManager.sendCommand(cmd)
-                    }
-                },
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(GREEN.copy(0.15f))
+                    .fillMaxWidth()
+                    .height(46.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Rounded.Send, null, tint = GREEN,
-                    modifier = Modifier.size(18.dp))
+                extraKeys.forEach { key ->
+                    val isActive = (key == "CTRL" && ctrlActive) || (key == "ALT" && altActive)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clickable {
+                                when (key) {
+                                    "MENU" -> onOpenDrawer()
+                                    "ESC"  -> input = ""
+                                    "CTRL" -> ctrlActive = !ctrlActive
+                                    "ALT"  -> altActive = !altActive
+                                    "TAB"  -> terminalManager.sendCommand("ls")
+                                    "UP" -> if (cmdHistory.isNotEmpty() && histIdx < cmdHistory.size - 1) { histIdx++; input = cmdHistory[histIdx] }
+                                    "DOWN" -> if (histIdx > 0) { histIdx--; input = cmdHistory[histIdx] } else { histIdx = -1; input = "" }
+                                    else -> {}
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = key,
+                            color = if (isActive) COLOR_GREEN else TEXT_PRIMARY,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
             }
+            
+            // 4. System Navigation Padding (This prevents merging with system buttons)
+            Spacer(Modifier.navigationBarsPadding())
         }
     }
 
     LaunchedEffect(Unit) {
+        delay(500)
         runCatching { focusReq.requestFocus() }
     }
 }
 
-private fun getErrorHint(error: String): String? {
-    val e = error.lowercase()
-    return when {
-        e.contains("command not found") || e.contains("not recognized") ->
-            "Perintah tidak dikenal. Ketik 'help' untuk daftar perintah tersedia."
-        e.contains("permission denied") ->
-            "Tidak ada izin akses. Coba 'chmod +x namafile' atau periksa izin file."
-        e.contains("no such file") || e.contains("not found") ->
-            "File/folder tidak ditemukan. Cek path dengan 'ls' atau 'pwd'."
-        e.contains("modulenotfounderror") || e.contains("no module named") ->
-            "Library Python tidak ada. Jalankan: pip install <namalibrary>"
-        e.contains("syntaxerror") ->
-            "Syntax Python salah. Periksa tanda kurung, titik dua (:), atau indentasi."
-        e.contains("indentationerror") ->
-            "Indentasi Python salah. Gunakan 4 spasi atau Tab secara konsisten."
-        e.contains("nameerror") ->
-            "Variabel belum didefinisikan. Periksa nama dan deklarasi variabel."
-        e.contains("typeerror") ->
-            "Tipe data tidak sesuai. Cek operasi yang dilakukan pada variabel."
-        e.contains("connection refused") ->
-            "Koneksi ditolak. Pastikan server aktif dan port benar."
-        e.contains("out of memory") ->
-            "Memori habis. Tutup aplikasi lain atau kurangi ukuran data."
-        else -> null
-    }
-}
+private val TEXT_PRIMARY = Color(0xFFE0E0E0)

@@ -1,9 +1,9 @@
 package com.example.codedroid.ui
 
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -12,11 +12,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+// Termux-compatible professional colors
+private val DRAWER_BG      = Color(0xFF000000)
+private val DRAWER_ITEM_BG = Color(0xFF151515)
+private val ACCENT_GREEN   = Color(0xFF4CAF50)
+private val TEXT_PRIMARY   = Color(0xFFE0E0E0)
+private val TEXT_SECONDARY = Color(0xFF909090)
+private val BORDER_COLOR   = Color(0xFF222222)
 
 data class DrawerItem(
     val page   : NavPage,
@@ -28,14 +38,14 @@ data class DrawerItem(
 
 val drawerItems = listOf(
     DrawerItem(NavPage.EDITOR,         Icons.Rounded.Code,          "Editor",            Color(0xFF64B5F6)),
-    DrawerItem(NavPage.FILES,          Icons.Rounded.Folder,        "File Manager",      Color(0xFFFFD54F)),
-    DrawerItem(NavPage.TERMINAL,       Icons.Rounded.Computer,      "Terminal",          Color(0xFF00FF41)),
-    DrawerItem(NavPage.FTP,            Icons.Rounded.Cloud,         "FTP Client",        Color(0xFF80DEEA)),
-    DrawerItem(NavPage.SNIPPETS,       Icons.Rounded.Bookmarks,     "Snippet",           Color(0xFFCE93D8)),
+    DrawerItem(NavPage.FILES,          Icons.Rounded.FolderOpen,    "File Manager",      Color(0xFFFFD54F)),
+    DrawerItem(NavPage.TERMINAL,       Icons.Rounded.Terminal,      "Terminal",          ACCENT_GREEN),
+    DrawerItem(NavPage.FTP,            Icons.Rounded.CloudQueue,    "FTP Client",        Color(0xFF80DEEA)),
+    DrawerItem(NavPage.SNIPPETS,       Icons.Rounded.AutoAwesome,   "Snippets",          Color(0xFFCE93D8)),
     DrawerItem(NavPage.EXTENSIONS,     Icons.Rounded.Extension,     "Extensions",        Color(0xFFFF8A65), "NEW"),
-    DrawerItem(NavPage.AI_PANEL,       Icons.Rounded.SmartToy,      "AI Panel",          Color(0xFFA5D6A7), "NEW"),
-    DrawerItem(NavPage.PYTHON_LIBRARY, Icons.Rounded.MenuBook,      "Python Library",    Color(0xFF80CBC4), "NEW"),
-    DrawerItem(NavPage.SETTINGS,       Icons.Rounded.Settings,      "Pengaturan",        Color(0xFFFFAB91))
+    DrawerItem(NavPage.AI_PANEL,       Icons.Rounded.Psychology,    "AI Panel",          Color(0xFFA5D6A7), "NEW"),
+    DrawerItem(NavPage.PYTHON_LIBRARY, Icons.Rounded.Storage,       "Python Library",    Color(0xFF80CBC4), "NEW"),
+    DrawerItem(NavPage.SETTINGS,       Icons.Rounded.Settings,      "Settings",          Color(0xFFFFAB91))
 )
 
 @Composable
@@ -48,56 +58,80 @@ fun AppDrawer(
     modifier       : Modifier = Modifier
 ) {
     ModalDrawerSheet(
-        modifier      = modifier.width(280.dp),
-        drawerShape   = RoundedCornerShape(topEnd = 20.dp, bottomEnd = 20.dp),
-        drawerContainerColor = MaterialTheme.colorScheme.surface
+        modifier      = modifier.width(300.dp),
+        drawerShape   = RoundedCornerShape(topEnd = 0.dp, bottomEnd = 0.dp), // Squared for professional look
+        drawerContainerColor = DRAWER_BG
     ) {
-        Column(Modifier.fillMaxSize()) {
-            // Header
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .border(width = 1.dp, color = BORDER_COLOR, shape = RoundedCornerShape(0.dp))
+        ) {
+            // High-End Header
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
                     .padding(24.dp)
             ) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.primary.copy(0.15f)),
+                                .size(50.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Brush.linearGradient(listOf(ACCENT_GREEN.copy(0.2f), Color.Transparent))),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("</>" , fontSize = 16.sp, fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary)
+                            Text(
+                                text     = "</>", 
+                                fontSize = 18.sp, 
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                color    = ACCENT_GREEN
+                            )
                         }
-                        Spacer(Modifier.width(12.dp))
+                        Spacer(Modifier.width(16.dp))
                         Column {
-                            Text("CodeDroid", fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface)
-                            Text("v2.2.0", fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(0.5f))
+                            Text(
+                                text       = "CodeDroid", 
+                                fontSize   = 19.sp, 
+                                fontWeight = FontWeight.ExtraBold,
+                                color      = TEXT_PRIMARY,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text  = "v2.2.0 - System Terminal", 
+                                fontSize = 11.sp,
+                                color = TEXT_SECONDARY,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
                     }
-                    Spacer(Modifier.height(16.dp))
-                    // File aktif
+                    
+                    Spacer(Modifier.height(20.dp))
+                    
+                    // Active Session Indicator
                     Surface(
-                        color  = MaterialTheme.colorScheme.surfaceVariant,
-                        shape  = RoundedCornerShape(10.dp)
+                        color  = DRAWER_ITEM_BG,
+                        shape  = RoundedCornerShape(8.dp),
+                        border = BorderStroke(0.5.dp, BORDER_COLOR)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Rounded.Description, null,
+                            Icon(
+                                imageVector = Icons.Rounded.History, 
+                                contentDescription = null,
                                 modifier = Modifier.size(16.dp),
-                                tint     = MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.width(8.dp))
+                                tint     = ACCENT_GREEN
+                            )
+                            Spacer(Modifier.width(10.dp))
                             Text(
-                                text     = (if (isModified) "● " else "") + fileName,
-                                fontSize = 12.sp,
-                                color    = MaterialTheme.colorScheme.onSurface,
+                                text     = if (currentPage == NavPage.EDITOR) "File: $fileName" else "Session: ${currentPage.name}",
+                                fontSize = 11.sp,
+                                color    = TEXT_PRIMARY,
+                                fontFamily = FontFamily.Monospace,
                                 maxLines = 1
                             )
                         }
@@ -105,18 +139,15 @@ fun AppDrawer(
                 }
             }
 
-            HorizontalDivider()
-
-            // Nav items
+            // Navigation List
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp, horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                    .padding(horizontal = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // Group 1: Main
-                DrawerGroupLabel("UTAMA")
+                DrawerGroupLabel("CORE NAVIGATION")
                 drawerItems.take(5).forEach { item ->
                     DrawerNavItem(item, currentPage == item.page) {
                         onNavigate(item.page)
@@ -124,12 +155,11 @@ fun AppDrawer(
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = BORDER_COLOR, thickness = 0.5.dp)
+                Spacer(Modifier.height(12.dp))
 
-                // Group 2: Fitur Baru
-                DrawerGroupLabel("FITUR BARU v2.2")
+                DrawerGroupLabel("ADVANCED FEATURES")
                 drawerItems.drop(5).take(3).forEach { item ->
                     DrawerNavItem(item, currentPage == item.page) {
                         onNavigate(item.page)
@@ -137,12 +167,11 @@ fun AppDrawer(
                     }
                 }
 
-                Spacer(Modifier.height(8.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = BORDER_COLOR, thickness = 0.5.dp)
+                Spacer(Modifier.height(12.dp))
 
-                // Group 3: Settings
-                DrawerGroupLabel("LAINNYA")
+                DrawerGroupLabel("SYSTEM")
                 drawerItems.last().let { item ->
                     DrawerNavItem(item, currentPage == item.page) {
                         onNavigate(item.page)
@@ -152,17 +181,26 @@ fun AppDrawer(
             }
 
             // Footer
-            HorizontalDivider()
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Icon(Icons.Rounded.Person, null,
-                    modifier = Modifier.size(16.dp),
-                    tint     = MaterialTheme.colorScheme.onSurface.copy(0.4f))
-                Spacer(Modifier.width(8.dp))
-                Text("Ade Pratama", fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(0.4f))
+                Text(
+                    text = "BUILD SUCCESSFUL",
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = ACCENT_GREEN,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Logged as codedroid@android",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = TEXT_SECONDARY
+                )
             }
         }
     }
@@ -172,10 +210,11 @@ fun AppDrawer(
 private fun DrawerGroupLabel(text: String) {
     Text(
         text     = text,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        color    = MaterialTheme.colorScheme.primary.copy(0.7f),
-        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp, top = 4.dp)
+        fontSize = 11.sp,
+        fontWeight = FontWeight.ExtraBold,
+        color    = TEXT_SECONDARY,
+        fontFamily = FontFamily.Monospace,
+        modifier = Modifier.padding(start = 8.dp, bottom = 8.dp, top = 4.dp)
     )
 }
 
@@ -185,56 +224,56 @@ private fun DrawerNavItem(
     isSelected: Boolean,
     onClick   : () -> Unit
 ) {
-    val bgColor = if (isSelected) item.color.copy(alpha = 0.12f) else Color.Transparent
+    val bgColor = if (isSelected) ACCENT_GREEN.copy(alpha = 0.15f) else Color.Transparent
+    val contentColor = if (isSelected) ACCENT_GREEN else TEXT_PRIMARY
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(bgColor)
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Color indicator
-        if (isSelected) {
-            Box(
-                modifier = Modifier
-                    .width(3.dp)
-                    .height(20.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(item.color)
-            )
-            Spacer(Modifier.width(10.dp))
-        } else {
-            Spacer(Modifier.width(13.dp))
-        }
-
         Icon(
             imageVector        = item.icon,
             contentDescription = item.label,
-            tint               = if (isSelected) item.color
-                                 else MaterialTheme.colorScheme.onSurface.copy(0.55f),
+            tint               = contentColor,
             modifier           = Modifier.size(22.dp)
         )
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(16.dp))
         Text(
             text       = item.label,
             fontSize   = 14.sp,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-            color      = if (isSelected) item.color
-                         else MaterialTheme.colorScheme.onSurface.copy(0.8f),
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            color      = contentColor,
+            fontFamily = FontFamily.Monospace,
             modifier   = Modifier.weight(1f)
         )
-        // Badge
+        
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(ACCENT_GREEN)
+            )
+        }
+
         item.badge?.let { badge ->
             Surface(
-                color  = MaterialTheme.colorScheme.primary,
-                shape  = RoundedCornerShape(6.dp)
+                color  = ACCENT_GREEN.copy(0.2f),
+                shape  = RoundedCornerShape(4.dp),
+                border = BorderStroke(1.dp, ACCENT_GREEN.copy(0.4f))
             ) {
-                Text(badge, fontSize = 8.sp, fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
+                Text(
+                    text     = badge, 
+                    fontSize = 8.sp, 
+                    fontWeight = FontWeight.Black,
+                    color = ACCENT_GREEN,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
             }
         }
     }

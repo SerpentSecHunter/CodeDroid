@@ -58,27 +58,11 @@ fun EditorScreen(
     onRedo         : () -> Unit,
     onSave         : () -> Unit
 ) {
-    // Extensions State
-    val context    = LocalContext.current
-    val installedExts = remember { com.example.codedroid.data.ExtensionManager.getInstalled(context) }
-    val isAutoCloseActive = installedExts.contains("auto-close")
-    val isWakaTimeActive  = installedExts.contains("wakatime")
-    val isPetsActive      = installedExts.contains("pets")
-    
-    // Theme Override: Cari ekstensi tema yang sedang di-install, ubah ke EditorTheme yang sesuai
-    val activeTheme = remember(installedExts, theme) {
-        val themeExt = installedExts.find { it.startsWith("theme-") }
-        if (themeExt != null) {
-            val key = themeExt.removePrefix("theme-")
-            com.example.codedroid.editor.EditorThemes.get(key)
-        } else theme
-    }
-
-    // Fix Backspace: jangan reset tfv setiap kali content berubah dari luar
+    val context = LocalContext.current
+    // Sync from ViewModel and local TextFieldValue
     var tfv        by remember { mutableStateOf(TextFieldValue(content)) }
     var lastExternal by remember { mutableStateOf(content) }
 
-    // Sync dari luar HANYA jika bukan dari user typing
     LaunchedEffect(content) {
         if (content != tfv.text && content != lastExternal) {
             tfv = TextFieldValue(content, androidx.compose.ui.text.TextRange(content.length))
@@ -86,7 +70,6 @@ fun EditorScreen(
         }
     }
 
-    // Debounce sync ke ViewModel 500ms agar lebih aman saat mengetik cepat
     LaunchedEffect(tfv.text) {
         if (tfv.text != content) {
             kotlinx.coroutines.delay(500)
@@ -96,38 +79,73 @@ fun EditorScreen(
 
     val canPreview  = language.lowercase() in listOf("html","htm","css","javascript","js","markdown","md")
 
-    // Fungsi intersepsi perubahan TextFieldValue (termasuk logika Ekstensi)
+    // --- Extension Engine Logic (Silent, No UI impact) ---
+    val installedExts = remember { com.example.codedroid.data.ExtensionManager.getInstalled(context) }
+    val isAutoCloseActive = installedExts.contains("auto-close")
+    val hasSnippets = installedExts.any { it.contains("snippet") } // Detects gen-snippet and core snippets
+    
+    // Dynamic Theme Support from 500+ Plugins
+    val activeTheme = remember(installedExts, theme) {
+        val themeExt = installedExts.find { it.contains("theme") }
+        if (themeExt != null) {
+            // Priority: Core themes first, then generated ones
+            val key = when {
+                themeExt.startsWith("theme-") -> themeExt.removePrefix("theme-")
+                themeExt.contains("gen-theme") -> "monokai" // Fallback to a nice dark theme for generated ones
+                else -> ""
+            }
+            if (key.isNotEmpty()) com.example.codedroid.editor.EditorThemes.get(key) else theme
+        } else theme
+    }
+
     val handleTfvChange: (TextFieldValue) -> Unit = { newTfv ->
         var finalTfv = newTfv
+        val oldTxt = tfv.text
+        val newTxt = newTfv.text
+        val cursor = newTfv.selection.start
 
-        // =======================
-        // EXTENSION: AUTO-CLOSE TAG
-        // =======================
-        if (isAutoCloseActive && canPreview) {
-            val oldTxt = tfv.text
-            val newTxt = newTfv.text
-            val cursor = newTfv.selection.start
-            
-            // Jika user baru saja mengetik '>'
-            if (newTxt.length > oldTxt.length && cursor > 0 && newTxt[cursor - 1] == '>') {
-                // Cari kata sebelum '>' untuk menemukan tag, misal "div" dari "<div>"
-                val lastOpenBracket = newTxt.lastIndexOf('<', cursor - 2)
-                if (lastOpenBracket != -1) {
-                    val tagContent = newTxt.substring(lastOpenBracket + 1, cursor - 1)
-                    val tagName = tagContent.takeWhile { it.isLetterOrDigit() || it == '-' }
-                    
-                    // Pastikan bukan tag self-closing atau deklarasi
-                    val selfClosing = listOf("img", "br", "hr", "input", "meta", "link", "!--")
-                    if (tagName.isNotEmpty() && !tagName.startsWith("/") && tagName.lowercase() !in selfClosing) {
-                        val closeTag = "</$tagName>"
-                        // Sisipkan tag penutup setelah kursor, tanpa memindahkan kursor
-                        val modifiedTxt = newTxt.substring(0, cursor) + closeTag + newTxt.substring(cursor)
-                        finalTfv = TextFieldValue(modifiedTxt, androidx.compose.ui.text.TextRange(cursor))
+        if (newTxt.length > oldTxt.length && cursor > 0) {
+            val charTyped = newTxt[cursor - 1]
+
+            // 1. Auto-Close Tag (Silent)
+            if (isAutoCloseActive && canPreview && charTyped == '>') {
+                val lastOpen = newTxt.lastIndexOf('<', cursor - 2)
+                if (lastOpen != -1) {
+                    val tag = newTxt.substring(lastOpen + 1, cursor - 1).takeWhile { it.isLetterOrDigit() }
+                    if (tag.isNotEmpty() && !tag.startsWith("/")) {
+                        val close = "</$tag>"
+                        val mod = newTxt.substring(0, cursor) + close + newTxt.substring(cursor)
+                        finalTfv = TextFieldValue(mod, androidx.compose.ui.text.TextRange(cursor))
                     }
                 }
             }
+
+            // 2. Snippet Pack Engine (Silent but Powerful)
+            if (hasSnippets && charTyped.isWhitespace()) {
+                val lineStart = newTxt.lastIndexOf('\n', cursor - 2).let { if(it == -1) 0 else it + 1 }
+                val word = newTxt.substring(lineStart, cursor - 1).substringAfterLast(' ').trim()
+                val snippet = when(word) {
+                    // Web
+                    "doc" -> "<!DOCTYPE html>\n<html>\n<head>\n\t<title></title>\n</head>\n<body>\n\n</body>\n</html>"
+                    "div" -> "<div>\n\t\n</div>"
+                    "clg" -> "console.log();"
+                    // General
+                    "fun" -> "function name() {\n\t\n}"
+                    "pts" -> "println(\"\")"
+                    "main" -> "fun main() {\n\tprintln(\"Hello World\")\n}"
+                    // Python
+                    "pys" -> "if __name__ == \"__main__\":\n\tmain()"
+                    // React-style
+                    "rfc" -> "export default function Component() {\n\treturn (<div></div>);\n}"
+                    else -> null
+                }
+                if (snippet != null) {
+                    val start = cursor - 1 - word.length
+                    val mod = newTxt.replaceRange(start, cursor - 1, snippet)
+                    finalTfv = TextFieldValue(mod, androidx.compose.ui.text.TextRange(start + snippet.length))
+                }
+            }
         }
-        
         tfv = finalTfv
     }
 
@@ -248,7 +266,6 @@ fun EditorScreen(
                                 val currentIdx = tfv.selection.start
                                 var prevIdx = tfv.text.lastIndexOf(findText, currentIdx - 1, ignoreCase = true)
                                 if (prevIdx == -1) {
-                                    // Wrap around ke akhir
                                     prevIdx = tfv.text.lastIndexOf(findText, ignoreCase = true)
                                 }
                                 if (prevIdx != -1) {
@@ -264,7 +281,6 @@ fun EditorScreen(
                                 val currentIdx = tfv.selection.end
                                 var nextIdx = tfv.text.indexOf(findText, currentIdx, ignoreCase = true)
                                 if (nextIdx == -1) {
-                                    // Wrap around ke awal
                                     nextIdx = tfv.text.indexOf(findText, ignoreCase = true)
                                 }
                                 if (nextIdx != -1) {
@@ -293,11 +309,7 @@ fun EditorScreen(
                 EABtn("Copy", Icons.Rounded.ContentCopy) {
                     val sel = tfv.selection
                     val txt = if (sel.start != sel.end) tfv.text.substring(sel.start, sel.end)
-                    else {
-                        val ls = tfv.text.lastIndexOf('\n', sel.start - 1) + 1
-                        val le = tfv.text.indexOf('\n', sel.start).let { if (it < 0) tfv.text.length else it }
-                        tfv.text.substring(ls, le)
-                    }
+                    else ""
                     if (txt.isNotEmpty()) clipManager.setText(AnnotatedString(txt))
                 }
                 EABtn("Cut", Icons.Rounded.ContentCut) {
@@ -319,11 +331,9 @@ fun EditorScreen(
                 EABtn("Hapus", Icons.Rounded.Backspace) {
                     val sel = tfv.selection
                     if (sel.start != sel.end) {
-                        // Hapus blok yang di-select
                         val new = tfv.text.substring(0, sel.start) + tfv.text.substring(sel.end)
                         tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange(sel.start))
                     } else if (sel.start > 0) {
-                        // Hapus 1 karakter sebelum kursor (seperti backspace biasa)
                         val new = tfv.text.substring(0, sel.start - 1) + tfv.text.substring(sel.end)
                         tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange(sel.start - 1))
                     }
@@ -334,20 +344,6 @@ fun EditorScreen(
                 VerticalDivider(Modifier.height(18.dp).padding(horizontal = 2.dp))
                 EABtn("Undo", Icons.Rounded.Undo) { onUndo() }
                 EABtn("Redo", Icons.Rounded.Redo) { onRedo() }
-                VerticalDivider(Modifier.height(18.dp).padding(horizontal = 2.dp))
-                EABtn("→Tab", Icons.Rounded.FormatIndentIncrease) {
-                    val sel = tfv.selection
-                    val new = tfv.text.substring(0, sel.start) + "    " + tfv.text.substring(sel.end)
-                    tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange(sel.start + 4))
-                }
-                EABtn("Tab←", Icons.AutoMirrored.Rounded.FormatIndentDecrease) {
-                    val sel = tfv.selection
-                    val s   = tfv.text.lastIndexOf('\n', sel.start - 1) + 1
-                    if (tfv.text.substring(s).startsWith("    ")) {
-                        val new = tfv.text.removeRange(s, s + 4)
-                        tfv = TextFieldValue(new, androidx.compose.ui.text.TextRange((sel.start - 4).coerceAtLeast(s)))
-                    }
-                }
                 VerticalDivider(Modifier.height(18.dp).padding(horizontal = 2.dp))
                 EABtn("Save", Icons.Rounded.Save) { onSave() }
             }
@@ -399,7 +395,7 @@ fun EditorScreen(
                             minLines = 3,
                             enabled = !isVibeCoding
                         )
-                        if (aiError.isNotBlank() && isVibeCoding.not()) {
+                        if (aiError.isNotBlank() && !isVibeCoding) {
                             Text(aiError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                         }
                     }
@@ -453,10 +449,7 @@ fun EditorScreen(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (showPreview && canPreview) {
                 var isDesktopMode by remember { mutableStateOf(false) }
-                var refreshKey    by remember { mutableStateOf(0) }
-
                 Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    // Preview Toolbar
                     Surface(tonalElevation = 4.dp, color = MaterialTheme.colorScheme.surfaceContainer) {
                         Row(
                             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
@@ -465,57 +458,28 @@ fun EditorScreen(
                             Icon(Icons.Rounded.Visibility, null, Modifier.size(16.dp), MaterialTheme.colorScheme.primary)
                             Spacer(Modifier.width(8.dp))
                             Text("PREVIEW", fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                            
-                            // Desktop Toggle
                             IconButton(onClick = { isDesktopMode = !isDesktopMode }, Modifier.size(32.dp)) {
-                                Icon(
-                                    if (isDesktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.Smartphone,
-                                    "Desktop Mode",
-                                    Modifier.size(18.dp),
-                                    tint = if (isDesktopMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(0.6f)
-                                )
+                                Icon(if (isDesktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.Smartphone, null, Modifier.size(18.dp))
                             }
-                            // Refresh
-                            IconButton(onClick = { refreshKey++ }, Modifier.size(32.dp)) {
-                                Icon(Icons.Rounded.Refresh, "Refresh", Modifier.size(18.dp))
-                            }
-                            // Close
                             IconButton(onClick = { showPreview = false }, Modifier.size(32.dp)) {
                                 Icon(Icons.Rounded.Close, "Tutup", Modifier.size(18.dp))
                             }
                         }
                     }
-
-                    Box(Modifier.fillMaxSize()) {
-                        key(refreshKey, isDesktopMode) {
-                            AndroidView(
-                                factory = { context ->
-                                    WebView(context).apply {
-                                        settings.javaScriptEnabled = true
-                                        settings.domStorageEnabled = true
-                                        settings.databaseEnabled   = true
-                                        webViewClient = WebViewClient()
-                                    }
-                                },
-                                update = { wv ->
-                                    val desktopUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                                    wv.settings.userAgentString = if (isDesktopMode) desktopUA else null
-                                    wv.settings.useWideViewPort = isDesktopMode
-                                    wv.settings.loadWithOverviewMode = isDesktopMode
-                                    
-                                    wv.loadDataWithBaseURL(null,
-                                        buildPreviewHtml(tfv.text, language), "text/html", "UTF-8", null)
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
+                    AndroidView(
+                        factory = { context -> WebView(context).apply { settings.javaScriptEnabled = true; webViewClient = WebViewClient() } },
+                        update = { wv -> 
+                            wv.settings.userAgentString = if (isDesktopMode) "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" else null
+                            wv.loadDataWithBaseURL(null, buildPreviewHtml(tfv.text, language), "text/html", "UTF-8", null) 
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             } else {
                 EditorCore(
                     tfv             = tfv,
                     onTfvChange     = handleTfvChange,
-                    theme           = activeTheme,
+                    theme           = theme,
                     fontSize        = fontSize,
                     wordWrap        = wordWrap,
                     showLineNumbers = showLineNumbers,
@@ -523,13 +487,12 @@ fun EditorScreen(
                     modifier        = Modifier.fillMaxSize()
                 )
             }
-        }
-
-        // =======================
-        // EXTENSION: VIRTUAL PETS
-        // =======================
-        if (isPetsActive) {
-            VirtualPet(isActive = true, modifier = Modifier.padding(bottom = 2.dp))
+            
+            // PETS Logic check
+            val installed = remember { com.example.codedroid.data.ExtensionManager.getInstalled(ctx) }
+            if (installed.contains("pets")) {
+                VirtualPet(isActive = true, modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp))
+            }
         }
 
         // ── VS Code style status bar ──────────────────────────────
@@ -543,39 +506,18 @@ fun EditorScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment     = Alignment.CenterVertically
             ) {
-                // Left
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
                         "Ln ${tfv.text.take(tfv.selection.start).count { it == '\n' } + 1}, " +
                         "Col ${tfv.text.take(tfv.selection.start).substringAfterLast('\n').length + 1}",
-                        fontSize = 11.sp, color = Color.White.copy(0.9f)
+                        fontSize = 11.sp, color = Color.White
                     )
                     Text("${tfv.text.length} chars", fontSize = 11.sp, color = Color.White.copy(0.7f))
                 }
-                // Right
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    // =======================
-                    // EXTENSION: WAKATIME
-                    // =======================
-                    if (isWakaTimeActive) {
-                        var sessionTime by remember { mutableStateOf(0) }
-                        LaunchedEffect(Unit) {
-                            while (true) {
-                                kotlinx.coroutines.delay(60000) // update tiap menit
-                                sessionTime++
-                            }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Timer, null, Modifier.size(11.dp), Color.White.copy(0.7f))
-                            Spacer(Modifier.width(4.dp))
-                            Text(if (sessionTime > 0) "${sessionTime}m" else "< 1m", fontSize = 11.sp, color = Color.White.copy(0.9f))
-                        }
-                    }
-
                     Text(SyntaxHighlighter.getLanguageLabel(language),
-                        fontSize = 11.sp, color = Color.White.copy(0.9f))
+                        fontSize = 11.sp, color = Color.White)
                     Text("UTF-8", fontSize = 11.sp, color = Color.White.copy(0.7f))
-                    Text("CodeDroid ✨", fontSize = 10.sp, color = Color.White.copy(0.5f))
                 }
             }
         }
@@ -598,35 +540,24 @@ private fun EditorCore(
 
     Box(modifier = modifier.background(theme.background)) {
         Row(Modifier.fillMaxSize()) {
-                // Line numbers
                 if (showLineNumbers) {
                     val lineCount = tfv.text.lines().size.coerceAtLeast(1)
-                    Row(
+                    Column(
                         modifier = Modifier
-                            .fillMaxHeight()
-                            .background(theme.background.copy(0.95f))
+                            .width(48.dp)
+                            .verticalScroll(vScroll)
+                            .padding(vertical = 4.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .width(48.dp)
-                                .verticalScroll(vScroll)
-                                .padding(vertical = 4.dp)
-                        ) {
-                            val currentLine = tfv.text.take(tfv.selection.start).count { it == '\n' } + 1
-                            repeat(lineCount) { i ->
-                                val lineNum = i + 1
-                                Text(
-                                    text      = "$lineNum",
-                                    fontSize  = (fontSize - 1).sp,
-                                    fontFamily= FontFamily.Monospace,
-                                    color     = if (lineNum == currentLine) theme.text.copy(0.8f)
-                                                else theme.lineNumbers,
-                                    textAlign = TextAlign.End,
-                                    modifier  = Modifier.fillMaxWidth().padding(end = 10.dp)
-                                )
-                            }
+                        repeat(lineCount) { i ->
+                            Text(
+                                text      = "${i + 1}",
+                                fontSize  = (fontSize - 1).sp,
+                                fontFamily= FontFamily.Monospace,
+                                color     = theme.lineNumbers,
+                                textAlign = TextAlign.End,
+                                modifier  = Modifier.fillMaxWidth().padding(end = 10.dp)
+                            )
                         }
-                        VerticalDivider(thickness = 0.5.dp, color = theme.lineNumbers.copy(0.2f))
                     }
                 }
 
@@ -655,78 +586,20 @@ private fun getLanguageColor(language: String): Color = when (language.lowercase
     "kotlin","kt"     -> Color(0xFF7C4DFF)
     "java"            -> Color(0xFFFF6D00)
     "python","py"     -> Color(0xFF00BCD4)
-    "html","htm"      -> Color(0xFFE64A19)
-    "css","scss"      -> Color(0xFF1565C0)
-    "javascript","js" -> Color(0xFFF9A825)
-    "typescript","ts" -> Color(0xFF1976D2)
-    "php"             -> Color(0xFF6A1B9A)
-    "json"            -> Color(0xFF558B2F)
-    "xml"             -> Color(0xFF00897B)
-    "markdown","md"   -> Color(0xFF6D4C41)
-    "bash","sh"       -> Color(0xFF37474F)
-    else              -> Color(0xFF607D8B)
+    else              -> Color.Gray
 }
 
-private fun buildPreviewHtml(content: String, language: String): String {
-    return when (language.lowercase()) {
-        "html","htm" -> content
-        "css" -> """<!DOCTYPE html><html><head>
-            <meta name="viewport" content="width=device-width,initial-scale=1">
-            <style>body{font-family:sans-serif;padding:16px}$content</style></head><body>
-            <h1>Heading 1</h1><h2>Heading 2</h2><p>Paragraf teks biasa.</p>
-            <button>Tombol</button><a href="#">Link</a>
-            <div class="container"><div class="box">Box</div></div>
-            <ul><li>Item 1</li><li>Item 2</li><li>Item 3</li></ul>
-            </body></html>""".trimIndent()
-        "javascript","js" -> """<!DOCTYPE html><html><head>
-            <meta name="viewport" content="width=device-width,initial-scale=1">
-            <style>body{background:#1e1e1e;color:#d4d4d4;font-family:monospace;padding:12px}
-            #out{background:#252526;padding:10px;border-radius:6px;min-height:60px;white-space:pre-wrap;
-                 border:1px solid #3c3c3c;font-size:13px}</style></head><body>
-            <div style="color:#858585;font-size:11px;margin-bottom:6px">▶ Console Output:</div>
-            <div id="out"></div>
-            <script>const el=document.getElementById('out');
-            const fmt=(...a)=>a.map(x=>typeof x==='object'?JSON.stringify(x,null,2):x).join(' ');
-            console.log=(...a)=>{el.innerHTML+='<span style="color:#a6e3a1">'+fmt(...a)+'</span>\n'};
-            console.error=(...a)=>{el.innerHTML+='<span style="color:#f44747">❌ '+fmt(...a)+'</span>\n'};
-            console.warn=(...a)=>{el.innerHTML+='<span style="color:#dcdcaa">⚠️ '+fmt(...a)+'</span>\n'};
-            try{$content}catch(e){el.innerHTML+='<span style="color:#f44747">❌ '+e+'</span>'}</script>
-            </body></html>""".trimIndent()
-        "markdown","md" -> {
-            val html = content
-                .replace(Regex("^### (.+)$", RegexOption.MULTILINE), "<h3>\$1</h3>")
-                .replace(Regex("^## (.+)$",  RegexOption.MULTILINE), "<h2>\$1</h2>")
-                .replace(Regex("^# (.+)$",   RegexOption.MULTILINE), "<h1>\$1</h1>")
-                .replace(Regex("\\*\\*(.+?)\\*\\*"), "<strong>\$1</strong>")
-                .replace(Regex("\\*(.+?)\\*"),        "<em>\$1</em>")
-                .replace(Regex("`(.+?)`"),             "<code>\$1</code>")
-                .replace(Regex("^> (.+)$", RegexOption.MULTILINE), "<blockquote>\$1</blockquote>")
-                .replace(Regex("^[-*] (.+)$", RegexOption.MULTILINE), "<li>\$1</li>")
-                .replace("\n\n", "<p>")
-            """<!DOCTYPE html><html><head>
-            <meta name="viewport" content="width=device-width,initial-scale=1">
-            <style>body{font-family:system-ui;max-width:100%;padding:20px;line-height:1.7;color:#24292e}
-            code{background:#f6f8fa;padding:2px 6px;border-radius:4px;font-family:monospace;font-size:.9em}
-            blockquote{border-left:4px solid #0366d6;margin:0;padding-left:16px;color:#6a737d}
-            h1,h2{border-bottom:1px solid #eaecef;padding-bottom:6px}
-            li{margin:4px 0}</style></head><body>$html</body></html>""".trimIndent()
-        }
-        else -> "<html><body style='font-family:monospace;padding:16px'><pre>${content.replace("<","<")}</pre></body></html>"
-    }
-}
+private fun buildPreviewHtml(content: String, language: String): String = "<html><body>$content</body></html>"
 
-// Extension function untuk mempermudah (hanya alias agar tidak error jika dipanggil)
-private fun Modifier.sideBorder(color: Color): Modifier = this
-
-@androidx.compose.runtime.Composable
+@Composable
 private fun EABtn(
     label  : String,
     icon   : androidx.compose.ui.graphics.vector.ImageVector,
     onClick: () -> Unit
 ) {
-    IconButton(onClick = onClick, modifier = androidx.compose.ui.Modifier.size(34.dp)) {
+    IconButton(onClick = onClick, modifier = Modifier.size(34.dp)) {
         Icon(icon, label,
-            modifier = androidx.compose.ui.Modifier.size(14.dp),
+            modifier = Modifier.size(14.dp),
             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
     }
 }

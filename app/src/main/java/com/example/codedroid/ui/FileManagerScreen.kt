@@ -1,17 +1,20 @@
 package com.example.codedroid.ui
 
+import android.content.Context
 import android.content.Intent
-import android.media.MediaPlayer
 import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import android.os.Build
+import android.os.Environment
+import android.os.storage.StorageManager
+import android.provider.Settings
+import android.webkit.MimeTypeMap
+import android.widget.Toast
+import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.*
@@ -20,12 +23,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,7 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.documentfile.provider.DocumentFile
+import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.example.codedroid.viewmodel.InsertMode
 import kotlinx.coroutines.Dispatchers
@@ -47,714 +48,584 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-data class FileEntry(
-    val uri: Uri,
+/**
+ * --- 1. DATA MODELS ---
+ */
+data class ZFile(
+    val file: File,
     val name: String,
     val isDirectory: Boolean,
-    val size: Long = 0,
-    val lastModified: Long = 0,
-    val extension: String = ""
+    val size: Long,
+    val lastModified: Long,
+    val extension: String,
+    val childCount: Int = 0
 )
 
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+/**
+ * --- 2. STYLE & COLORS (ZArchiver Theme) ---
+ */
+val ZGreen = Color(0xFF4CAF50)
+val ZDarkBg = Color(0xFF0F0F0F)
+val ZSurface = Color(0xFF1A1A1A)
+val ZOnSurface = Color(0xFFF0F0F0)
+val ZFolderColor = Color(0xFFFFCC33)
+
+/**
+ * --- 3. MAIN SCREEN ---
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileManagerScreen(
-    onOpenFile  : (Uri) -> Unit,
+    onOpenFile: (Uri) -> Unit,
     onInsertCode: ((String, InsertMode) -> Unit)? = null
 ) {
-    val context     = LocalContext.current
-    val scope       = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    // Dapatkan path app-specific
-    val appFilesPath = remember { context.getExternalFilesDir(null)?.absolutePath ?: "" }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     
-    // States untuk SAF
-    var internalStorageUri by remember { mutableStateOf<Uri?>(null) }
-    var sdCardUri by remember { mutableStateOf<Uri?>(null) }
-    var currentPath by remember { mutableStateOf(appFilesPath) } 
-    var isSafMode   by remember { mutableStateOf(false) }
+    val internalPath = remember { Environment.getExternalStorageDirectory().absolutePath }
+    var sdCardPaths by remember { mutableStateOf<List<String>>(emptyList()) }
     
-    // Periksa storage yang sudah diberikan izin sebelumnya
-    LaunchedEffect(Unit) {
-        context.contentResolver.persistedUriPermissions.forEach { perm ->
-            val uri = perm.uri
-            if (uri.toString().contains("primary")) internalStorageUri = uri
-            else if (!uri.toString().contains("primary")) sdCardUri = uri
-        }
-        internalStorageUri?.let { currentPath = it.toString(); isSafMode = true }
-    }
-
-    var files       by remember { mutableStateOf<List<FileEntry>>(emptyList()) }
-    var isLoading   by remember { mutableStateOf(false) }
-    var viewMode    by remember { mutableStateOf("list") } 
+    var currentPath by remember { mutableStateOf(internalPath) }
+    var allFiles by remember { mutableStateOf<List<ZFile>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    var showSearch  by remember { mutableStateOf(false) }
-    var showNewDialog by remember { mutableStateOf(false) }
-    var newIsFolder by remember { mutableStateOf(false) }
-    var newName     by remember { mutableStateOf("") }
-    var newNameError by remember { mutableStateOf("") }
-    var refreshKey  by remember { mutableStateOf(0) }
-
-    // Media viewer states
-    var imageViewFile by remember { mutableStateOf<FileEntry?>(null) }
-    var audioViewFile by remember { mutableStateOf<FileEntry?>(null) }
-    var videoViewFile by remember { mutableStateOf<FileEntry?>(null) }
-    var insertTarget  by remember { mutableStateOf<Pair<FileEntry, InsertMode>?>(null) }
-
-    // Operation states
-    var deleteTarget by remember { mutableStateOf<FileEntry?>(null) }
-    var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
-    var renameNewName by remember { mutableStateOf("") }
-    var renameError   by remember { mutableStateOf("") }
-
-    // Launcher SAF
-    var pendingStorageType by remember { mutableStateOf<String?>(null) } 
-    val safPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let {
-            context.contentResolver.takePersistableUriPermission(
-                it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-            if (pendingStorageType == "INTERNAL") internalStorageUri = it
-            else if (pendingStorageType == "SD") sdCardUri = it
-            currentPath = it.toString()
-            isSafMode = true
-        }
+    var isSearching by remember { mutableStateOf(false) }
+    var refreshTrigger by remember { mutableIntStateOf(0) }
+    
+    // Status Manager (ZArchiver Mode)
+    var isManager by remember { 
+        mutableStateOf(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Environment.isExternalStorageManager() else true) 
     }
 
+    // New Folder / File States
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var createType by remember { mutableStateOf("file") } // "file" or "folder"
+    var newTargetName by remember { mutableStateOf("") }
+
+    // --- Preview States ---
+    var previewFile by remember { mutableStateOf<ZFile?>(null) }
+    var showPreview by remember { mutableStateOf(false) }
+
+    // File loading function
     fun loadFiles() {
         scope.launch {
             isLoading = true
-            files = withContext(Dispatchers.IO) {
-                runCatching {
-                    val list = if (isSafMode) {
-                        val uri = Uri.parse(currentPath)
-                        val dir = DocumentFile.fromTreeUri(context, uri)
-                        dir?.listFiles()?.map {
-                            FileEntry(
-                                uri = it.uri,
-                                name = it.name ?: "",
-                                isDirectory = it.isDirectory,
-                                size = it.length(),
-                                lastModified = it.lastModified(),
-                                extension = it.name?.substringAfterLast('.', "") ?: ""
-                            )
-                        }
-                    } else {
-                        val dir = File(currentPath)
-                        dir.listFiles()?.map {
-                            FileEntry(
-                                uri = Uri.fromFile(it),
+            allFiles = withContext(Dispatchers.IO) {
+                try {
+                    val directory = File(currentPath)
+                    if (directory.exists() && directory.isDirectory) {
+                        directory.listFiles()?.map {
+                            ZFile(
+                                file = it,
                                 name = it.name,
                                 isDirectory = it.isDirectory,
-                                size = it.length(),
+                                size = if (it.isDirectory) 0 else it.length(),
                                 lastModified = it.lastModified(),
-                                extension = it.extension
+                                extension = it.extension.lowercase(),
+                                childCount = if (it.isDirectory) it.listFiles()?.size ?: 0 else 0
                             )
-                        }
-                    }
-                    list?.filter {
-                        if (searchQuery.isBlank()) true
-                        else it.name.contains(searchQuery, ignoreCase = true)
-                    }?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
-                    ?: emptyList()
-                }.getOrElse { 
-                    it.printStackTrace()
-                    emptyList() 
+                        }?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                            ?: emptyList()
+                    } else emptyList()
+                } catch (e: Exception) {
+                    emptyList()
                 }
             }
             isLoading = false
         }
     }
 
-    LaunchedEffect(currentPath, refreshKey) { loadFiles() }
-    LaunchedEffect(searchQuery) { if (searchQuery.isNotBlank()) loadFiles() }
-
-    Column(Modifier.fillMaxSize()) {
-        Surface(tonalElevation = 2.dp) {
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = {
-                        if (isSafMode) {
-                            val uri = Uri.parse(currentPath)
-                            val isRoot = (uri == internalStorageUri || uri == sdCardUri)
-                            if (isRoot) {
-                                currentPath = appFilesPath
-                                isSafMode = false
-                            } else {
-                                val doc = DocumentFile.fromSingleUri(context, uri)
-                                val parent = doc?.parentFile
-                                if (parent != null) {
-                                    currentPath = parent.uri.toString()
-                                } else {
-                                    currentPath = appFilesPath
-                                    isSafMode = false
-                                }
-                            }
-                        } else {
-                            val parentFile = File(currentPath).parentFile
-                            if (parentFile != null && parentFile.absolutePath.startsWith(appFilesPath)) {
-                                currentPath = parentFile.absolutePath
-                            } else if (parentFile != null && parentFile.absolutePath == "/") {
-                                scope.launch { snackbarHostState.showSnackbar("Sudah di folder awal") }
-                            }
-                        }
-                    }) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Kembali")
-                    }
-
-                    if (showSearch) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text("Cari...") },
-                            modifier = Modifier.weight(1f).height(48.dp),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        IconButton(onClick = { showSearch = false; searchQuery = "" }) {
-                            Icon(Icons.Rounded.Close, null)
-                        }
-                    } else {
-                        Column(Modifier.weight(1f)) {
-                            val displayName = if (isSafMode) {
-                                val uri = Uri.parse(currentPath)
-                                val doc = if (uri == internalStorageUri || uri == sdCardUri) {
-                                    DocumentFile.fromTreeUri(context, uri)
-                                } else {
-                                    DocumentFile.fromSingleUri(context, uri)
-                                }
-                                doc?.name ?: "Penyimpanan Utama"
-                            } else {
-                                File(currentPath).name.ifEmpty { "Penyimpanan Utama" }
-                            }
-                            Text(displayName, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                            Text(currentPath, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface.copy(0.6f))
-                        }
-                        IconButton(onClick = { refreshKey++ }) { Icon(Icons.Rounded.Refresh, "Muat Ulang") }
-                        IconButton(onClick = { showSearch = true }) { Icon(Icons.Rounded.Search, "Cari") }
-                        IconButton(onClick = { viewMode = if (viewMode == "list") "grid" else "list" }) {
-                            Icon(if (viewMode == "list") Icons.Rounded.GridView else Icons.AutoMirrored.Rounded.List, "Ganti Tampilan")
-                        }
-                        IconButton(onClick = { newIsFolder = false; showNewDialog = true }) { Icon(Icons.Rounded.Add, "Tambah File", tint = MaterialTheme.colorScheme.primary) }
-                        IconButton(onClick = { newIsFolder = true; showNewDialog = true }) { Icon(Icons.Rounded.CreateNewFolder, "Tambah Folder", tint = MaterialTheme.colorScheme.secondary) }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = isSafMode && currentPath == internalStorageUri?.toString(),
-                        onClick = {
-                            if (internalStorageUri != null) {
-                                currentPath = internalStorageUri.toString()
-                                isSafMode = true
-                            } else {
-                                pendingStorageType = "INTERNAL"
-                                safPicker.launch(null)
-                            }
-                        },
-                        label = { Text("Penyimpanan Internal") },
-                        leadingIcon = { Icon(Icons.Rounded.Storage, null, Modifier.size(16.dp)) }
-                    )
-
-                    FilterChip(
-                        selected = isSafMode && currentPath == sdCardUri?.toString(),
-                        onClick = {
-                            if (sdCardUri != null) {
-                                currentPath = sdCardUri.toString()
-                                isSafMode = true
-                            } else {
-                                pendingStorageType = "SD"
-                                safPicker.launch(null)
-                            }
-                        },
-                        label = { Text("Kartu SD") },
-                        leadingIcon = { Icon(Icons.Rounded.SdCard, null, Modifier.size(16.dp)) }
-                    )
-
-                    FilterChip(
-                        selected = !isSafMode && currentPath.startsWith(appFilesPath),
-                        onClick = { currentPath = appFilesPath; isSafMode = false },
-                        label = { Text("File Aplikasi") },
-                        leadingIcon = { Icon(Icons.Rounded.FolderOpen, null, Modifier.size(16.dp)) }
-                    )
-                }
-            }
+    LaunchedEffect(refreshTrigger, currentPath) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            isManager = Environment.isExternalStorageManager()
         }
+        sdCardPaths = getSDCardPathsRobust(context)
+        loadFiles()
+    }
 
-        HorizontalDivider()
-
-        Box(Modifier.weight(1f)) {
-            if (isLoading) {
-                Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
-            } else if (files.isEmpty()) {
-                Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Rounded.FolderOpen, null, Modifier.size(64.dp), tint = Color.Gray.copy(0.3f))
-                        Text("Folder kosong", color = Color.Gray)
+    Scaffold(
+        topBar = {
+            Column(modifier = Modifier.background(ZSurface).statusBarsPadding()) {
+                // Storage Tabs
+                Row(modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    ZTab("INTERNAL", isSelected = currentPath.startsWith(internalPath), modifier = Modifier.weight(1f)) { 
+                        currentPath = internalPath 
                     }
-                }
-            } else {
-                if (viewMode == "list") {
-                    LazyColumn(Modifier.fillMaxSize()) {
-                        items(files, key = { it.uri.toString() }) { file ->
-                            FileListItem(
-                                file = file,
-                                onClick = {
-                                    handleFileClick(
-                                        file, onOpenFile,
-                                        { imageViewFile = it },
-                                        { audioViewFile = it },
-                                        { videoViewFile = it },
-                                        { currentPath = it.uri.toString() }
-                                    )
-                                },
-                                onLongClick = {
-                                    handleLongClick(file, onInsertCode) { insertTarget = it }
-                                },
-                                onRename = {
-                                    renameTarget = file
-                                    renameNewName = file.name
-                                },
-                                onDelete = {
-                                    deleteTarget = file
-                                }
-                            )
-                            HorizontalDivider(
-                                modifier = Modifier.padding(start = 58.dp),
-                                thickness = 0.4.dp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(0.06f)
-                            )
+                    sdCardPaths.forEachIndexed { index, path ->
+                        val label = if (sdCardPaths.size > 1) "SD CARD ${index + 1}" else "SD CARD"
+                        ZTab(label, isSelected = currentPath.startsWith(path), modifier = Modifier.weight(1f)) {
+                            currentPath = path
                         }
                     }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(100.dp),
-                        contentPadding = PaddingValues(8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(files, key = { it.uri.toString() }) { file ->
-                            FileGridItem(
-                                file = file,
-                                onClick = {
-                                    handleFileClick(
-                                        file, onOpenFile,
-                                        { imageViewFile = it },
-                                        { audioViewFile = it },
-                                        { videoViewFile = it },
-                                        { currentPath = it.uri.toString() }
-                                    )
-                                },
-                                onLongClick = {
-                                    handleLongClick(file, onInsertCode) { insertTarget = it }
-                                },
-                                onRename = {
-                                    renameTarget = file
-                                    renameNewName = file.name
-                                },
-                                onDelete = {
-                                    deleteTarget = file
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Dialogs ──────────────────────────────────────────────────────
-
-    imageViewFile?.let { img ->
-        Dialog(onDismissRequest = { imageViewFile = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Box(Modifier.fillMaxSize().background(Color.Black).clickable { imageViewFile = null }) {
-                AsyncImage(model = img.uri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-                Surface(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(), color = Color.Black.copy(0.6f)) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(img.name, color = Color.White, fontSize = 14.sp)
-                            Text(formatFileSize(img.size), color = Color.White.copy(0.6f), fontSize = 11.sp)
-                        }
-                        IconButton(onClick = { imageViewFile = null }) { Icon(Icons.Rounded.Close, null, tint = Color.White) }
-                    }
-                }
-            }
-        }
-    }
-
-    audioViewFile?.let { mFile -> MediaPlayerDialog(file = mFile, onDismiss = { audioViewFile = null }) }
-    videoViewFile?.let { vFile -> VideoPlayerDialog(file = vFile, onDismiss = { videoViewFile = null }) }
-
-    insertTarget?.let { (file, mode) ->
-        InsertCodeDialog(file = file, mode = mode, onInsert = { tag -> onInsertCode?.invoke(tag, mode); insertTarget = null }, onDismiss = { insertTarget = null })
-    }
-
-    if (showNewDialog) {
-        AlertDialog(
-            onDismissRequest = { showNewDialog = false; newName = ""; newNameError = "" },
-            title = { Text(if (newIsFolder) "Buat Folder" else "Buat File") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it; newNameError = "" },
-                        label = { Text("Nama") },
-                        isError = newNameError.isNotEmpty(),
-                        supportingText = if (newNameError.isNotEmpty()) { { Text(newNameError) } } else null,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    val trimName = newName.trim()
-                    if (trimName.isEmpty()) { newNameError = "Nama kosong"; return@Button }
-                    val path = currentPath
-                    val isSaf = isSafMode
-                    showNewDialog = false
-                    newName = ""
-                    scope.launch {
-                        val ok = withContext(Dispatchers.IO) {
-                            runCatching {
-                                if (isSaf) {
-                                    val parent = DocumentFile.fromTreeUri(context, Uri.parse(path))
-                                    if (newIsFolder) parent?.createDirectory(trimName) != null
-                                    else parent?.createFile("application/octet-stream", trimName) != null
-                                } else {
-                                    val target = File(path, trimName)
-                                    if (newIsFolder) target.mkdirs() else target.createNewFile()
-                                }
-                            }.getOrElse { false }
-                        }
-                        if (ok) refreshKey++ else snackbarHostState.showSnackbar("Gagal membuat")
-                    }
-                }) { Text("Buat") }
-            },
-            dismissButton = { TextButton(onClick = { showNewDialog = false }) { Text("Batal") } }
-        )
-    }
-
-    renameTarget?.let { file ->
-        AlertDialog(
-            onDismissRequest = { renameTarget = null; renameNewName = ""; renameError = "" },
-            title = { Text("Ubah Nama") },
-            text = {
-                OutlinedTextField(
-                    value = renameNewName,
-                    onValueChange = { renameNewName = it; renameError = "" },
-                    label = { Text("Nama Baru") },
-                    isError = renameError.isNotEmpty(),
-                    supportingText = if (renameError.isNotEmpty()) { { Text(renameError) } } else null,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    val trimName = renameNewName.trim()
-                    if (trimName.isEmpty()) { renameError = "Nama tidak boleh kosong"; return@Button }
-                    if (trimName == file.name) { renameTarget = null; return@Button }
-                    val isSaf = isSafMode
-                    val targetFile = file
-                    renameTarget = null
-                    scope.launch {
-                        val ok = withContext(Dispatchers.IO) {
-                            runCatching {
-                                if (isSaf) {
-                                    val doc = DocumentFile.fromSingleUri(context, targetFile.uri)
-                                    doc?.renameTo(trimName) == true
-                                } else {
-                                    val f = File(targetFile.uri.path ?: "")
-                                    val dest = File(f.parentFile, trimName)
-                                    f.renameTo(dest)
-                                }
-                            }.getOrElse { false }
-                        }
-                        if (ok) {
-                            refreshKey++
-                            snackbarHostState.showSnackbar("Berhasil mengubah nama")
-                        } else {
-                            snackbarHostState.showSnackbar("Gagal mengubah nama")
-                        }
-                        renameNewName = ""
-                    }
-                }) { Text("Simpan") }
-            },
-            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Batal") } }
-        )
-    }
-
-    deleteTarget?.let { file ->
-        AlertDialog(
-            onDismissRequest = { deleteTarget = null },
-            title = { Text("Hapus ${if (file.isDirectory) "Folder" else "File"}") },
-            text = { Text("Apakah Anda yakin ingin menghapus '${file.name}'? Tindakan ini tidak dapat dibatalkan.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val isSaf = isSafMode
-                        val targetFile = file
-                        deleteTarget = null
-                        scope.launch {
-                            val ok = withContext(Dispatchers.IO) {
-                                runCatching {
-                                    if (isSaf) {
-                                        val doc = DocumentFile.fromSingleUri(context, targetFile.uri)
-                                        doc?.delete() == true
-                                    } else {
-                                        val f = File(targetFile.uri.path ?: "")
-                                        if (f.isDirectory) f.deleteRecursively() else f.delete()
-                                    }
-                                }.getOrElse { false }
-                            }
-                            if (ok) {
-                                refreshKey++
-                                snackbarHostState.showSnackbar("Berhasil menghapus")
-                            } else {
-                                snackbarHostState.showSnackbar("Gagal menghapus")
-                            }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) { Text("Hapus", color = MaterialTheme.colorScheme.onError) }
-            },
-            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Batal") } }
-        )
-    }
-
-    Box(Modifier.fillMaxSize(), Alignment.BottomCenter) { SnackbarHost(snackbarHostState) }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────
-
-private fun handleFileClick(
-    file: FileEntry, 
-    onOpenFile: (Uri) -> Unit, 
-    showImg: (FileEntry) -> Unit, 
-    showAudio: (FileEntry) -> Unit, 
-    showVideo: (FileEntry) -> Unit,
-    openFolder: (FileEntry) -> Unit
-) {
-    if (file.isDirectory) openFolder(file)
-    else {
-        val ext = file.extension.lowercase()
-        when {
-            ext in listOf("jpg","jpeg","png","gif","webp") -> showImg(file)
-            ext in listOf("mp3","wav","m4a","ogg") -> showAudio(file)
-            ext in listOf("mp4","mkv","webm","3gp") -> showVideo(file)
-            else -> onOpenFile(file.uri)
-        }
-    }
-}
-
-private fun handleLongClick(file: FileEntry, onInsert: ((String, InsertMode) -> Unit)?, setTarget: (Pair<FileEntry, InsertMode>) -> Unit) {
-    if (onInsert == null || file.isDirectory) return
-    val mode = when (file.extension.lowercase()) {
-        in listOf("jpg","jpeg","png") -> InsertMode.IMAGE
-        in listOf("mp3","wav") -> InsertMode.AUDIO
-        in listOf("mp4","mkv") -> InsertMode.VIDEO
-        else -> return
-    }
-    setTarget(file to mode)
-}
-
-@Composable
-fun getFileIconColor(file: FileEntry): Pair<ImageVector, Color> {
-    if (file.isDirectory) return Icons.Rounded.Folder to Color(0xFFFFD54F)
-    return when (file.extension.lowercase()) {
-        "kt","java","py","js","html","css" -> Icons.Rounded.Code to Color(0xFF2196F3)
-        "jpg","png","jpeg" -> Icons.Rounded.Image to Color(0xFFE91E63)
-        "mp3","wav" -> Icons.Rounded.MusicNote to Color(0xFF9C27B0)
-        "mp4","mkv" -> Icons.Rounded.VideoLibrary to Color(0xFFF44336)
-        else -> Icons.Rounded.Description to Color(0xFF90A4AE)
-    }
-}
-
-fun formatFileSize(bytes: Long): String = when {
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> "${bytes/1024} KB"
-    else -> "${bytes/(1024*1024)} MB"
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun FileListItem(
-    file: FileEntry, 
-    onClick: () -> Unit, 
-    onLongClick: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val (icon, color) = getFileIconColor(file)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(vertical = 8.dp, horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(Modifier.size(40.dp).background(color.copy(0.1f), RoundedCornerShape(8.dp)), Alignment.Center) { Icon(icon, null, tint=color) }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(file.name, fontSize=14.sp, fontWeight=FontWeight.Medium, maxLines=1, overflow=TextOverflow.Ellipsis)
-            Text(if (file.isDirectory) "Folder" else formatFileSize(file.size), fontSize=11.sp, color=Color.Gray)
-        }
-        Row {
-            IconButton(onClick = onRename, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Rounded.Edit, "Edit", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary.copy(0.7f))
-            }
-            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Rounded.Delete, "Hapus", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.error.copy(0.7f))
-            }
-            if (file.isDirectory) {
-                Icon(Icons.Rounded.ChevronRight, null, tint=Color.Gray, modifier = Modifier.align(Alignment.CenterVertically))
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun FileGridItem(
-    file: FileEntry, 
-    onClick: () -> Unit, 
-    onLongClick: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val (icon, color) = getFileIconColor(file)
-    Card(
-        Modifier.combinedClickable(onClick=onClick, onLongClick=onLongClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(0.3f))
-    ) {
-        Box(Modifier.padding(8.dp)) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                Icon(icon, null, Modifier.size(42.dp), tint=color)
-                Spacer(Modifier.height(4.dp))
-                Text(file.name, fontSize=11.sp, maxLines=1, overflow=TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-            }
-            Row(Modifier.align(Alignment.TopEnd)) {
-                Box(Modifier.size(24.dp).clickable { onRename() }, Alignment.Center) {
-                    Icon(Icons.Rounded.Edit, null, Modifier.size(14.dp), MaterialTheme.colorScheme.primary)
-                }
-                Box(Modifier.size(24.dp).clickable { onDelete() }, Alignment.Center) {
-                    Icon(Icons.Rounded.Delete, null, Modifier.size(14.dp), MaterialTheme.colorScheme.error)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun MediaPlayerDialog(file: FileEntry, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    var isPlaying by remember { mutableStateOf(false) }
-    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
-    
-    DisposableEffect(Unit) {
-        val mp = MediaPlayer().apply {
-            setDataSource(context, file.uri)
-            prepare()
-            start()
-            setOnCompletionListener { isPlaying = false }
-        }
-        mediaPlayer = mp
-        isPlaying = true
-        onDispose { 
-            mp.stop()
-            mp.release() 
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(28.dp), tonalElevation = 6.dp) {
-            Column(Modifier.padding(24.dp).width(280.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Rounded.MusicNote, null, Modifier.size(64.dp), MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(16.dp))
-                Text(file.name, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("Memutar Audio", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(24.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    FilledIconButton(onClick = { if (isPlaying) mediaPlayer?.pause() else mediaPlayer?.start(); isPlaying = !isPlaying }, modifier = Modifier.size(56.dp)) {
-                        Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null)
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Tutup") }
-            }
-        }
-    }
-}
-
-@Composable
-fun VideoPlayerDialog(file: FileEntry, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(file.uri))
-            prepare()
-            playWhenReady = true
-        }
-    }
-    DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
-            AndroidView(factory = { ctx -> PlayerView(ctx).apply { player = exoPlayer; useController = true } }, modifier = Modifier.fillMaxSize())
-            IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).background(Color.Black.copy(0.4f), RoundedCornerShape(50))) {
-                Icon(Icons.Rounded.Close, null, tint = Color.White)
-            }
-            Text(file.name, color = Color.White, fontSize = 12.sp, modifier = Modifier.align(Alignment.TopStart).padding(16.dp).background(Color.Black.copy(0.4f), RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 4.dp))
-        }
-    }
-}
-
-@Composable
-fun InsertCodeDialog(file: FileEntry, mode: InsertMode, onInsert: (String) -> Unit, onDismiss: () -> Unit) {
-    val path = file.uri.toString()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Sisipkan Link") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                val options = when (mode) {
-                    InsertMode.IMAGE -> listOf(
-                        "HTML" to "<img src='$path' alt='${file.name}' style='max-width:100%'>",
-                        "Markdown" to "![${file.name}]($path)"
-                    )
-                    InsertMode.AUDIO -> listOf(
-                        "HTML" to "<audio controls src='$path'>Browser tidak mendukung audio.</audio>",
-                        "Markdown" to "[🎵 ${file.name}]($path)"
-                    )
-                    InsertMode.VIDEO -> listOf(
-                        "HTML" to "<video controls src='$path' style='max-width:100%'>Browser tidak mendukung video.</video>",
-                        "Markdown" to "[🎥 ${file.name}]($path)"
-                    )
                 }
                 
-                options.forEach { (label, code) ->
-                    Column {
-                        Text(label, fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                        Surface(
-                            onClick = { onInsert(code) },
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(0.5f),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(code, fontSize = 11.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(12.dp))
+                // Toolbar
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isSearching) {
+                        IconButton(onClick = { isSearching = false; searchQuery = "" }) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, null, tint = ZGreen)
                         }
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("Search...", color = Color.Gray, fontSize = 15.sp) },
+                            modifier = Modifier.weight(1f),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                cursorColor = ZGreen,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            ),
+                            singleLine = true
+                        )
+                    } else {
+                        IconButton(onClick = {
+                            val parent = File(currentPath).parent
+                            if (parent != null && (parent.startsWith(internalPath) || sdCardPaths.any { parent.startsWith(it) })) {
+                                currentPath = parent
+                            }
+                        }) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, null, tint = ZGreen)
+                        }
+                        
+                        val displayPath = when {
+                            currentPath == internalPath -> "Internal Storage"
+                            sdCardPaths.any { currentPath == it } -> "SD Card"
+                            currentPath.startsWith(internalPath) -> currentPath.substringAfter(internalPath)
+                            else -> sdCardPaths.find { currentPath.startsWith(it) }?.let { currentPath.substringAfter(it) } ?: currentPath
+                        }
+                        
+                        Text(
+                            text = displayPath.trimStart('/'),
+                            color = ZOnSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, 
+                            modifier = Modifier.weight(1f).padding(start = 4.dp),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                        
+                        IconButton(onClick = { isSearching = true }) { Icon(Icons.Rounded.Search, null, tint = ZOnSurface) }
+                        IconButton(onClick = { refreshTrigger++ }) { Icon(Icons.Rounded.Refresh, null, tint = ZOnSurface) }
                     }
+                }
+                HorizontalDivider(color = Color.White.copy(0.05f))
+            }
+        },
+        floatingActionButton = {
+            if (isManager || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                FloatingActionButton(
+                    onClick = { showCreateDialog = true; createType = "file" },
+                    containerColor = ZGreen,
+                    contentColor = Color.White,
+                    shape = CircleShape
+                ) {
+                    Icon(Icons.Rounded.Add, "Create New")
                 }
             }
         },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } }
+        containerColor = ZDarkBg
+    ) { padding ->
+        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+            val displayFiles = if (searchQuery.isBlank()) allFiles else allFiles.filter { it.name.contains(searchQuery, true) }
+
+            if (!isManager && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // Setup Permission (ZArchiver Mode)
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(40.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Rounded.FolderSpecial, null, Modifier.size(70.dp), ZGreen)
+                    Spacer(Modifier.height(20.dp))
+                    Text("File Access Needed", color = ZOnSurface, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("Click OK to show all your folder contents instantly.", color = Color.Gray, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
+                    Spacer(Modifier.height(30.dp))
+                    Button(onClick = {
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                            intent.data = Uri.parse("package:${context.packageName}")
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                        }
+                    }, colors = ButtonDefaults.buttonColors(containerColor = ZGreen)) {
+                        Text("OK", color = Color.White)
+                    }
+                }
+            } else if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center), color = ZGreen)
+            } else if (displayFiles.isEmpty()) {
+                Text(if(isSearching) "Not found" else "Empty Folder", color = Color.Gray, modifier = Modifier.align(Alignment.Center))
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(displayFiles, key = { it.file.absolutePath }) { item ->
+                        ZFileRowFix(
+                            item = item,
+                            onClick = {
+                                if (item.isDirectory) {
+                                    currentPath = item.file.absolutePath
+                                } else {
+                                    val ext = item.extension
+                                    val isMedia = ext in listOf("jpg", "jpeg", "png", "webp", "gif", "mp4", "mkv", "mp3", "wav", "pdf")
+                                    if (isMedia) {
+                                        previewFile = item
+                                        showPreview = true
+                                    } else {
+                                        onOpenFile(Uri.fromFile(item.file))
+                                    }
+                                }
+                            },
+                            onDelete = { it.file.deleteRecursively(); refreshTrigger++ },
+                            onRename = { old, new -> File(old.file.parent, new).let { old.file.renameTo(it) }; refreshTrigger++ }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Preview Dialog
+        if (showPreview && previewFile != null) {
+            ZFilePreviewDialog(
+                fileItem = previewFile!!,
+                onDismiss = { showPreview = false; previewFile = null },
+                onOpenExternal = { file -> 
+                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, context.contentResolver.getType(uri) ?: "*/*")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Open with..."))
+                }
+            )
+        }
+
+        // Create Dialog
+        if (showCreateDialog) {
+            AlertDialog(
+                onDismissRequest = { showCreateDialog = false },
+                containerColor = ZSurface,
+                title = { 
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if(createType == "file") Icons.Rounded.Description else Icons.Rounded.CreateNewFolder, null, tint = ZGreen)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Create New ${createType.replaceFirstChar { it.uppercase() }}", color = ZOnSurface) 
+                    }
+                },
+                text = {
+                    Column {
+                        Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            FilterChip(selected = createType == "file", onClick = { createType = "file" }, label = { Text("File") })
+                            FilterChip(selected = createType == "folder", onClick = { createType = "folder" }, label = { Text("Folder") })
+                        }
+                        OutlinedTextField(
+                            value = newTargetName,
+                            onValueChange = { newTargetName = it },
+                            placeholder = { Text(if(createType == "file") "filename.kt" else "Folder Name") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = ZGreen,
+                                unfocusedBorderColor = Color.Gray,
+                                focusedTextColor = ZOnSurface,
+                                unfocusedTextColor = ZOnSurface
+                            )
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (newTargetName.isNotBlank()) {
+                            val newFile = File(currentPath, newTargetName)
+                            try {
+                                if (createType == "file") newFile.createNewFile()
+                                else newFile.mkdir()
+                                refreshTrigger++
+                                showCreateDialog = false
+                                newTargetName = ""
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }) { Text("CREATE", color = ZGreen) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCreateDialog = false }) { Text("CANCEL") }
+                }
+            )
+        }
+    }
+}
+
+/**
+ * --- 4. SUB-COMPONENTS ---
+ */
+@Composable
+fun ZTab(name: String, isSelected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .clickable { onClick() }
+            .background(if (isSelected) ZGreen.copy(alpha = 0.08f) else Color.Transparent),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = name,
+            color = if (isSelected) ZGreen else Color.Gray,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+            fontSize = 12.sp
+        )
+        if (isSelected) {
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(2.dp).background(ZGreen))
+        }
+    }
+}
+
+@Composable
+fun ZFileRowFix(item: ZFile, onClick: () -> Unit, onDelete: (ZFile) -> Unit, onRename: (ZFile, String) -> Unit) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf(item.name) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(14.dp, 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        val meta = getZFileIconMeta(item)
+        val icon = meta.first
+        val color = meta.second
+        
+        Icon(icon, null, tint = color, modifier = Modifier.size(28.dp))
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(item.name, color = ZOnSurface, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row {
+                val info = if (item.isDirectory) "${item.childCount} items" else formatReadableSize(item.size)
+                Text(info, color = Color.Gray, fontSize = 10.sp)
+                Text(" • ", color = Color.Gray, fontSize = 10.sp)
+                Text(formatReadableDate(item.lastModified), color = Color.Gray, fontSize = 10.sp)
+            }
+        }
+        Box {
+            IconButton(onClick = { showMenu = true }, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Rounded.MoreVert, null, tint = Color.Gray.copy(0.4f), modifier = Modifier.size(18.dp))
+            }
+            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, modifier = Modifier.background(ZSurface)) {
+                DropdownMenuItem(
+                    text = { Text("Rename", color = ZOnSurface) }, 
+                    onClick = { showMenu = false; showRenameDialog = true },
+                    leadingIcon = { Icon(Icons.Rounded.Edit, null, tint = Color(0xFF42A5F5), modifier = Modifier.size(18.dp)) }
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete", color = Color(0xFFEF5350)) }, 
+                    onClick = { showMenu = false; onDelete(item) },
+                    leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = Color(0xFFEF5350), modifier = Modifier.size(18.dp)) }
+                )
+            }
+        }
+    }
+    HorizontalDivider(modifier = Modifier.padding(start = 58.dp), color = Color.White.copy(0.03f))
+
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            containerColor = ZSurface,
+            title = { Text("Rename", color = ZOnSurface) },
+            text = { 
+                OutlinedTextField(
+                    value = newName, 
+                    onValueChange = { newName = it }, 
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = ZGreen,
+                        unfocusedBorderColor = Color.Gray,
+                        focusedTextColor = ZOnSurface,
+                        unfocusedTextColor = ZOnSurface
+                    )
+                ) 
+            },
+            confirmButton = { TextButton(onClick = { onRename(item, newName); showRenameDialog = false }) { Text("SAVE", color = ZGreen) } },
+            dismissButton = { TextButton(onClick = { showRenameDialog = false }) { Text("CANCEL") } }
+        )
+    }
+}
+
+/**
+ * --- 5. PREVIEW COMPONENTS ---
+ */
+@Composable
+fun ZFilePreviewDialog(
+    fileItem: ZFile,
+    onDismiss: () -> Unit,
+    onOpenExternal: (File) -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color.Black
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                // Header
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, null, tint = Color.White)
+                    }
+                    Text(
+                        fileItem.name, 
+                        color = Color.White, 
+                        fontSize = 16.sp, 
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                    )
+                    IconButton(onClick = { onOpenExternal(fileItem.file) }) {
+                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, tint = ZGreen)
+                    }
+                }
+
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    when (fileItem.extension) {
+                        "jpg", "jpeg", "png", "webp", "gif" -> {
+                            AsyncImage(
+                                model = fileItem.file,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                        "mp4", "mkv", "mp3", "wav", "ogg" -> {
+                            ZMediaPlayer(fileItem.file)
+                        }
+                        "pdf" -> {
+                            // Basic PDF info - recommending external for full reading
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Rounded.PictureAsPdf, null, Modifier.size(100.dp), Color(0xFFE57373))
+                                Spacer(Modifier.height(16.dp))
+                                Text("PDF Document", color = Color.White, fontSize = 20.sp)
+                                Text("${formatReadableSize(fileItem.size)} • ${formatReadableDate(fileItem.lastModified)}", color = Color.Gray, fontSize = 14.sp)
+                                Spacer(Modifier.height(24.dp))
+                                Button(
+                                    onClick = { onOpenExternal(fileItem.file) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = ZGreen)
+                                ) {
+                                    Text("VIEW FULL DOCUMENT")
+                                }
+                            }
+                        }
+                        else -> {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.AutoMirrored.Rounded.InsertDriveFile, null, Modifier.size(80.dp), Color.Gray)
+                                Spacer(Modifier.height(16.dp))
+                                Text("No Preview Available", color = Color.White)
+                                TextButton(onClick = { onOpenExternal(fileItem.file) }) {
+                                    Text("Open externally", color = ZGreen)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Footer info
+                Surface(
+                    color = Color.White.copy(0.05f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Path: ${fileItem.file.absolutePath}",
+                        color = Color.Gray,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(16.dp),
+                        maxLines = 2
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ZMediaPlayer(file: File) {
+    val context = LocalContext.current
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            prepare()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { exoPlayer.release() }
+    }
+
+    AndroidView(
+        factory = { ctx ->
+            PlayerView(ctx).apply {
+                player = exoPlayer
+                useController = true
+                setBackgroundColor(android.graphics.Color.BLACK)
+            }
+        },
+        modifier = Modifier.fillMaxSize()
     )
+}
+
+/**
+ * --- 6. UTILS ---
+ */
+fun getSDCardPathsRobust(context: Context): List<String> {
+    val paths = mutableListOf<String>()
+    val sm = context.getSystemService(StorageManager::class.java)
+    sm.storageVolumes.forEach { vol ->
+        if (vol.isRemovable && vol.state == Environment.MEDIA_MOUNTED) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                vol.directory?.absolutePath?.let { paths.add(it) }
+            } else {
+                try {
+                    val path = vol.javaClass.getMethod("getPath").invoke(vol) as String
+                    paths.add(path)
+                } catch (e: Exception) {}
+            }
+        }
+    }
+    if (paths.isEmpty()) {
+        context.getExternalFilesDirs(null).forEach { f ->
+            if (f != null && Environment.isExternalStorageRemovable(f)) {
+                val p = f.absolutePath.split("/Android")[0]
+                if (!paths.contains(p)) paths.add(p)
+            }
+        }
+    }
+    return paths.distinct()
+}
+
+fun getZFileIconMeta(item: ZFile): Pair<ImageVector, Color> {
+    if (item.isDirectory) return Icons.Rounded.Folder to ZFolderColor
+    return when (item.extension) {
+        "jpg", "jpeg", "png", "webp", "gif" -> Icons.Rounded.Image to Color(0xFFE91E63)
+        "mp4", "mkv", "mov", "avi" -> Icons.Rounded.VideoLibrary to Color(0xFFF44336)
+        "mp3", "wav", "m4a", "ogg" -> Icons.Rounded.MusicNote to Color(0xFF9C27B0)
+        "pdf" -> Icons.Rounded.PictureAsPdf to Color(0xFFFF5252)
+        "zip", "rar", "7z", "tar", "gz" -> Icons.AutoMirrored.Rounded.InsertDriveFile to Color(0xFFFFA000)
+        "kt", "java", "py", "js", "html", "css" -> Icons.Rounded.Code to Color(0xFF8BC34A)
+        else -> Icons.AutoMirrored.Rounded.InsertDriveFile to Color(0xFF90A4AE)
+    }
+}
+
+fun formatReadableSize(size: Long): String {
+    if (size <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB")
+    val i = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt().coerceIn(0, 3)
+    return String.format("%.1f %s", size / Math.pow(1024.0, i.toDouble()), units[i])
+}
+
+fun formatReadableDate(time: Long): String {
+    return SimpleDateFormat("dd/MM/yy HH:mm", Locale.getDefault()).format(Date(time))
 }
